@@ -1,5 +1,6 @@
 import { composioPluginConfigSchema, parseComposioConfig } from "./config.js";
 import { createComposioClient } from "./client.js";
+import { createComposioSearchTool } from "./tools/search.js";
 import { createComposioExecuteTool } from "./tools/execute.js";
 import { createComposioConnectionsTool } from "./tools/connections.js";
 import { registerComposioCli } from "./cli.js";
@@ -58,6 +59,13 @@ const composioPlugin = {
 
     // Register tools (lazily create client on first use)
     api.registerTool({
+      ...createComposioSearchTool(ensureClient(), config),
+      execute: async (toolCallId: string, params: Record<string, unknown>) => {
+        return createComposioSearchTool(ensureClient(), config).execute(toolCallId, params);
+      },
+    });
+
+    api.registerTool({
       ...createComposioExecuteTool(ensureClient(), config),
       execute: async (toolCallId: string, params: Record<string, unknown>) => {
         return createComposioExecuteTool(ensureClient(), config).execute(toolCallId, params);
@@ -90,19 +98,17 @@ const composioPlugin = {
 You have access to Composio tools for third-party integrations (Gmail, Sentry, etc.).
 
 ## Usage
-1. Use \`composio_manage_connections\` with action="status" to check if a toolkit is connected. Use action="create" to generate an auth URL if needed.
-2. Use \`composio_execute_tool\` with a tool_slug and arguments to execute actions.
+1. Use \`composio_search_tools\` to find tools and their parameter schemas.
+2. Use \`composio_manage_connections\` with action="status" to check if a toolkit is connected. Use action="create" to generate an auth URL if needed.
+3. Use \`composio_execute_tool\` with the tool_slug and arguments from search results.
 
-## Common tool slugs
-- GMAIL_FETCH_EMAILS, GMAIL_SEND_EMAIL, GMAIL_GET_PROFILE
-- SENTRY_LIST_ISSUES, SENTRY_GET_ISSUE
-
+Always search first to get the correct parameter schema before executing a tool.
 Tool slugs are uppercase. If a tool fails with auth errors, prompt the user to connect the toolkit.
 </composio-tools>`,
       };
     });
 
-    api.logger.info("[composio] Plugin registered with 2 tools and CLI commands");
+    api.logger.info("[composio] Plugin registered with 3 tools and CLI commands");
   },
 };
 
