@@ -1,11 +1,7 @@
 import { composioPluginConfigSchema, parseComposioConfig } from "./config.js";
 import { createComposioClient } from "./client.js";
-import { createComposioSearchTool } from "./tools/search.js";
 import { createComposioExecuteTool } from "./tools/execute.js";
-import { createComposioMultiExecuteTool } from "./tools/multi-execute.js";
 import { createComposioConnectionsTool } from "./tools/connections.js";
-import { createComposioWorkbenchTool } from "./tools/workbench.js";
-import { createCompositoBashTool } from "./tools/bash.js";
 import { registerComposioCli } from "./cli.js";
 
 /**
@@ -62,13 +58,6 @@ const composioPlugin = {
 
     // Register tools (lazily create client on first use)
     api.registerTool({
-      ...createComposioSearchTool(ensureClient(), config),
-      execute: async (toolCallId: string, params: Record<string, unknown>) => {
-        return createComposioSearchTool(ensureClient(), config).execute(toolCallId, params);
-      },
-    });
-
-    api.registerTool({
       ...createComposioExecuteTool(ensureClient(), config),
       execute: async (toolCallId: string, params: Record<string, unknown>) => {
         return createComposioExecuteTool(ensureClient(), config).execute(toolCallId, params);
@@ -76,30 +65,9 @@ const composioPlugin = {
     });
 
     api.registerTool({
-      ...createComposioMultiExecuteTool(ensureClient(), config),
-      execute: async (toolCallId: string, params: Record<string, unknown>) => {
-        return createComposioMultiExecuteTool(ensureClient(), config).execute(toolCallId, params);
-      },
-    });
-
-    api.registerTool({
       ...createComposioConnectionsTool(ensureClient(), config),
       execute: async (toolCallId: string, params: Record<string, unknown>) => {
         return createComposioConnectionsTool(ensureClient(), config).execute(toolCallId, params);
-      },
-    });
-
-    api.registerTool({
-      ...createComposioWorkbenchTool(ensureClient(), config),
-      execute: async (toolCallId: string, params: Record<string, unknown>) => {
-        return createComposioWorkbenchTool(ensureClient(), config).execute(toolCallId, params);
-      },
-    });
-
-    api.registerTool({
-      ...createCompositoBashTool(ensureClient(), config),
-      execute: async (toolCallId: string, params: Record<string, unknown>) => {
-        return createCompositoBashTool(ensureClient(), config).execute(toolCallId, params);
       },
     });
 
@@ -119,29 +87,22 @@ const composioPlugin = {
     api.on("before_agent_start", () => {
       return {
         prependContext: `<composio-tools>
-You have access to Composio Tool Router, which provides 1000+ third-party integrations (Gmail, Slack, GitHub, Notion, Linear, Jira, HubSpot, Google Drive, etc.).
+You have access to Composio tools for third-party integrations (Gmail, Sentry, etc.).
 
-## How to use Composio tools
+## Usage
+1. Use \`composio_manage_connections\` with action="status" to check if a toolkit is connected. Use action="create" to generate an auth URL if needed.
+2. Use \`composio_execute_tool\` with a tool_slug and arguments to execute actions.
 
-1. **Search first**: Use \`composio_search_tools\` to find tools matching the user's task. Search by describing what you want to do (e.g., "send email", "create github issue").
+## Common tool slugs
+- GMAIL_FETCH_EMAILS, GMAIL_SEND_EMAIL, GMAIL_GET_PROFILE
+- SENTRY_LIST_ISSUES, SENTRY_GET_ISSUE
 
-2. **Check connections**: Before executing, use \`composio_manage_connections\` with action="status" to verify the required toolkit is connected. If not connected, use action="create" to generate an auth URL for the user.
-
-3. **Execute tools**: Use \`composio_execute_tool\` with the tool_slug from search results and arguments matching the tool's schema. For multiple operations, use \`composio_multi_execute\` to run up to 50 tools in parallel.
-
-4. **Remote processing**: For large responses or bulk operations, use \`composio_workbench\` to run Python code in a remote Jupyter sandbox with helpers like run_composio_tool(), invoke_llm(), etc. Use \`composio_bash\` for shell commands in the remote sandbox.
-
-## Important notes
-- Tool slugs are uppercase (e.g., GMAIL_SEND_EMAIL, GITHUB_CREATE_ISSUE)
-- Always use exact tool_slug values from search results - do not invent slugs
-- Check the parameters schema from search results before executing
-- If a tool fails with auth errors, prompt the user to connect the toolkit
-- Use workbench/bash tools when processing data stored in remote files or scripting bulk operations
+Tool slugs are uppercase. If a tool fails with auth errors, prompt the user to connect the toolkit.
 </composio-tools>`,
       };
     });
 
-    api.logger.info("[composio] Plugin registered with 6 tools and CLI commands");
+    api.logger.info("[composio] Plugin registered with 2 tools and CLI commands");
   },
 };
 

@@ -1,15 +1,18 @@
 {
   "name": "@customclaw/composio",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
   "description": "Composio Tool Router plugin for OpenClaw — access 1000+ third-party integrations",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "openclaw": {
-    "extensions": ["./dist/index.js"]
+    "extensions": [
+      "./dist/index.js"
+    ]
   },
   "scripts": {
     "build": "tsc",
+    "test": "vitest run",
     "prepublishOnly": "npm run build"
   },
   "files": [
@@ -25,12 +28,13 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@composio/core": "^0.5.5",
+    "@composio/core": "^0.6.3",
     "@sinclair/typebox": "0.34.47",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^3.2.4"
   }
 }
