@@ -3,8 +3,6 @@ import type {
   ComposioConfig,
   ToolSearchResult,
   ToolExecutionResult,
-  MultiExecutionItem,
-  MultiExecutionResult,
   ConnectionStatus,
 } from "./types.js";
 
@@ -238,77 +236,6 @@ export class ComposioClient {
   }
 
   /**
-   * Execute multiple tools in parallel using COMPOSIO_MULTI_EXECUTE_TOOL
-   */
-  async multiExecute(
-    executions: MultiExecutionItem[],
-    userId?: string
-  ): Promise<MultiExecutionResult> {
-    const uid = this.getUserId(userId);
-    const session = await this.getSession(uid);
-
-    // Filter out blocked toolkits and limit to 50
-    const allowedExecutions = executions
-      .filter(exec => {
-        const toolkit = exec.tool_slug.split("_")[0]?.toLowerCase() || "";
-        return this.isToolkitAllowed(toolkit);
-      })
-      .slice(0, 50);
-
-    if (allowedExecutions.length === 0) {
-      return { results: [] };
-    }
-
-    try {
-      const response = await this.executeMetaTool("COMPOSIO_MULTI_EXECUTE_TOOL", {
-        tools: allowedExecutions.map(exec => ({
-          tool_slug: exec.tool_slug,
-          arguments: exec.arguments,
-        })),
-        session: { id: session.sessionId },
-        sync_response_to_workbench: false,
-      });
-
-      if (!response.successful) {
-        return {
-          results: allowedExecutions.map(exec => ({
-            tool_slug: exec.tool_slug,
-            success: false,
-            error: response.error || "Execution failed",
-          })),
-        };
-      }
-
-      const apiResults = (response.data?.results as Array<{
-        tool_slug: string;
-        index: number;
-        response: {
-          successful: boolean;
-          data?: unknown;
-          error?: string | null;
-        };
-      }>) || [];
-
-      return {
-        results: apiResults.map(r => ({
-          tool_slug: r.tool_slug,
-          success: r.response.successful,
-          data: r.response.data,
-          error: r.response.error ?? undefined,
-        })),
-      };
-    } catch (err) {
-      return {
-        results: allowedExecutions.map(exec => ({
-          tool_slug: exec.tool_slug,
-          success: false,
-          error: err instanceof Error ? err.message : String(err),
-        })),
-      };
-    }
-  }
-
-  /**
    * Get connection status for toolkits using session.toolkits()
    */
   async getConnectionStatus(
@@ -450,86 +377,6 @@ export class ComposioClient {
     }
   }
 
-  /**
-   * Get the assistive prompt for the agent
-   */
-  async getAssistivePrompt(userId?: string): Promise<string> {
-    const uid = this.getUserId(userId);
-    const session = await this.getSession(uid);
-    return session.experimental.assistivePrompt;
-  }
-
-  /**
-   * Execute Python code in the remote workbench using COMPOSIO_REMOTE_WORKBENCH
-   */
-  async executeWorkbench(
-    code: string,
-    options?: {
-      thought?: string;
-      currentStep?: string;
-      currentStepMetric?: string;
-      userId?: string;
-    }
-  ): Promise<{ success: boolean; output?: unknown; error?: string }> {
-    const uid = this.getUserId(options?.userId);
-    const session = await this.getSession(uid);
-
-    try {
-      const response = await this.executeMetaTool("COMPOSIO_REMOTE_WORKBENCH", {
-        code_to_execute: code,
-        session_id: session.sessionId,
-        ...(options?.thought ? { thought: options.thought } : {}),
-        ...(options?.currentStep ? { current_step: options.currentStep } : {}),
-        ...(options?.currentStepMetric ? { current_step_metric: options.currentStepMetric } : {}),
-      });
-
-      if (!response.successful) {
-        return { success: false, error: response.error || "Workbench execution failed" };
-      }
-
-      return {
-        success: true,
-        output: response.data,
-      };
-    } catch (err) {
-      return {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-  }
-
-  /**
-   * Execute bash commands in the remote sandbox using COMPOSIO_REMOTE_BASH_TOOL
-   */
-  async executeBash(
-    command: string,
-    userId?: string
-  ): Promise<{ success: boolean; output?: unknown; error?: string }> {
-    const uid = this.getUserId(userId);
-    const session = await this.getSession(uid);
-
-    try {
-      const response = await this.executeMetaTool("COMPOSIO_REMOTE_BASH_TOOL", {
-        command,
-        session_id: session.sessionId,
-      });
-
-      if (!response.successful) {
-        return { success: false, error: response.error || "Bash execution failed" };
-      }
-
-      return {
-        success: true,
-        output: response.data,
-      };
-    } catch (err) {
-      return {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-  }
 }
 
 /**

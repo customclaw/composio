@@ -24,20 +24,6 @@ export interface ToolExecutionResult {
   error?: string;
 }
 
-export interface MultiExecutionItem {
-  tool_slug: string;
-  arguments: Record<string, unknown>;
-}
-
-export interface MultiExecutionResult {
-  results: Array<{
-    tool_slug: string;
-    success: boolean;
-    data?: unknown;
-    error?: string;
-  }>;
-}
-
 export interface ConnectionStatus {
   toolkit: string;
   connected: boolean;
@@ -45,9 +31,3 @@ export interface ConnectionStatus {
   authUrl?: string;
 }
 
-export interface ComposioClientOptions {
-  apiKey: string;
-  defaultUserId?: string;
-  allowedToolkits?: string[];
-  blockedToolkits?: string[];
-}
