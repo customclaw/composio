@@ -175,7 +175,7 @@ openclaw plugins install ./customclaw-composio-0.0.1.tgz
 
 ## Acknowledgments
 
-This project is based on [openclaw-composio](https://github.com/ComposioHQ/openclaw-composio) by Peter Steinberger, licensed under the MIT License. See [THIRD-PARTY-NOTICES](./THIRD-PARTY-NOTICES) for full license text.
+This project is based on the Composio plugin from [openclaw-composio](https://github.com/ComposioHQ/openclaw-composio) by ComposioHQ. See [THIRD-PARTY-NOTICES](./THIRD-PARTY-NOTICES) for details.
 
 ## Links
 

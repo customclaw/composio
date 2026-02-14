@@ -1,6 +1,12 @@
-This project is derived from openclaw-composio
-(https://github.com/ComposioHQ/openclaw-composio),
-licensed under the MIT License:
+This project is based on the Composio plugin from:
+https://github.com/ComposioHQ/openclaw-composio
+
+That repository is a fork of OpenClaw with the Composio plugin added by the
+ComposioHQ team. The repository-level MIT license (Copyright (c) 2025 Peter
+Steinberger) covers the OpenClaw codebase, not the Composio plugin specifically.
+
+The Composio plugin code (under extensions/composio/) was authored by ComposioHQ.
+We include the repo's MIT license below as it covers the repository as a whole:
 
 MIT License
 
