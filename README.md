@@ -1,10 +1,17 @@
-# @customclaw/composio
+# Composio Tool Router Plugin for OpenClaw
 
-Composio Tool Router plugin for OpenClaw. Provides access to 1000+ third-party integrations (Gmail, Sentry, Slack, GitHub, Notion, etc.) via three tools:
+Access 1000+ third-party tools through Composio's unified Tool Router interface.
 
-- **composio_search_tools** — search for tools by describing what you want to do
-- **composio_execute_tool** — execute a tool with auto-injected default arguments
-- **composio_manage_connections** — check/initiate OAuth connections with auto-discovery
+## Features
+
+- **Search Tools**: Find tools by describing what you want to accomplish
+- **Execute Tools**: Run any tool with authenticated connections
+- **Multi-Execute**: Run up to 50 tools in parallel
+- **Connection Management**: Connect to toolkits via OAuth or API keys
+
+## Supported Integrations
+
+Gmail, Slack, GitHub, Notion, Linear, Jira, HubSpot, Salesforce, Google Drive, Asana, Trello, and 1000+ more.
 
 ## Install
 
@@ -12,21 +19,17 @@ Composio Tool Router plugin for OpenClaw. Provides access to 1000+ third-party i
 openclaw plugins install @customclaw/composio
 ```
 
-## Client Setup
+## Configuration
 
-### 1. Create a Composio account for the client
-
-Go to [platform.composio.dev](https://platform.composio.dev) and create an account. Copy the API key from Settings.
-
-### 2. Install the plugin
+### Option 1: Environment Variable
 
 ```bash
-openclaw plugins install @customclaw/composio
+export COMPOSIO_API_KEY=your-api-key
 ```
 
-### 3. Configure per-client settings
+### Option 2: OpenClaw Config
 
-Add to the client's `~/.openclaw/openclaw.json`:
+Add to `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -35,7 +38,7 @@ Add to the client's `~/.openclaw/openclaw.json`:
       "composio": {
         "enabled": true,
         "config": {
-          "apiKey": "COMPOSIO_API_KEY_HERE",
+          "apiKey": "your-api-key",
           "defaultUserId": "client-companyname-uuid",
           "allowedToolkits": ["gmail", "sentry"]
         }
@@ -45,22 +48,111 @@ Add to the client's `~/.openclaw/openclaw.json`:
 }
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `apiKey` | Yes | Client's Composio API key |
-| `defaultUserId` | Yes | Unique ID scoping OAuth connections to this client |
-| `allowedToolkits` | Recommended | Restrict which integrations are available |
-| `blockedTools` | No | Map of toolkit → blocked tool slugs for safety |
-| `defaultArgs` | No | Pre-configured args per toolkit (usually auto-discovered) |
+Get your API key from [platform.composio.dev/settings](https://platform.composio.dev/settings).
 
-### 4. Connect toolkits
-
-The agent will prompt the user to connect each toolkit on first use via `composio_manage_connections`. The user clicks the auth URL to complete OAuth.
-
-### 5. Restart the gateway
+## CLI Commands
 
 ```bash
-openclaw gateway restart
+# List available toolkits
+openclaw composio list
+
+# Check connection status
+openclaw composio status
+openclaw composio status github
+
+# Connect to a toolkit (opens auth URL)
+openclaw composio connect github
+openclaw composio connect gmail
+
+# Disconnect from a toolkit
+openclaw composio disconnect github
+
+# Search for tools
+openclaw composio search "send email"
+openclaw composio search "create issue" --toolkit github
+```
+
+## Agent Tools
+
+The plugin provides six tools for agents:
+
+### `composio_search_tools`
+
+Search for tools matching a task description.
+
+```json
+{
+  "query": "send an email with attachment",
+  "toolkits": ["gmail"],
+  "limit": 5
+}
+```
+
+### `composio_execute_tool`
+
+Execute a single tool.
+
+```json
+{
+  "tool_slug": "GMAIL_SEND_EMAIL",
+  "arguments": {
+    "to": "user@example.com",
+    "subject": "Hello",
+    "body": "Message content"
+  }
+}
+```
+
+### `composio_multi_execute`
+
+Execute multiple tools in parallel (up to 50).
+
+```json
+{
+  "executions": [
+    { "tool_slug": "GITHUB_CREATE_ISSUE", "arguments": { "title": "Bug", "repo": "org/repo" } },
+    { "tool_slug": "SLACK_SEND_MESSAGE", "arguments": { "channel": "#dev", "text": "Issue created" } }
+  ]
+}
+```
+
+### `composio_manage_connections`
+
+Manage toolkit connections.
+
+```json
+{
+  "action": "status",
+  "toolkits": ["github", "gmail"]
+}
+```
+
+### `composio_workbench`
+
+Execute Python code in a remote Jupyter sandbox.
+
+### `composio_bash`
+
+Execute bash commands in a remote sandbox.
+
+## Advanced Configuration
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "composio": {
+        "enabled": true,
+        "config": {
+          "apiKey": "your-api-key",
+          "defaultUserId": "user_123",
+          "allowedToolkits": ["github", "gmail", "slack"],
+          "blockedToolkits": ["dangerous-toolkit"]
+        }
+      }
+    }
+  }
+}
 ```
 
 ## Updating
@@ -70,22 +162,7 @@ openclaw plugins update @customclaw/composio
 openclaw gateway restart
 ```
 
-Gateway restart is required after updates — plugin code is loaded at startup.
-
-## Architecture
-
-```
-Composio API Key (per client)
-└── defaultUserId (unique per client)
-    ├── Gmail OAuth connection
-    ├── Sentry OAuth connection
-    └── ...
-```
-
-- Each client gets their own Composio account + API key for full isolation
-- OAuth connections are scoped to `defaultUserId` — clients can't see each other's data
-- Auto-discovery (e.g. Sentry org slug) runs on first connection check and caches results
-- Curated tool catalogs ensure the agent sees useful tools first (Composio search returns alphabetically)
+Gateway restart is required after updates.
 
 ## Development
 
@@ -93,9 +170,15 @@ Composio API Key (per client)
 npm install
 npm run build
 npm pack  # creates .tgz for local testing
+openclaw plugins install ./customclaw-composio-0.0.1.tgz
 ```
 
-Test locally:
-```bash
-openclaw plugins install ./customclaw-composio-1.0.0.tgz
-```
+## Acknowledgments
+
+This project is based on [openclaw-composio](https://github.com/ComposioHQ/openclaw-composio) by Peter Steinberger, licensed under the MIT License. See [THIRD-PARTY-NOTICES](./THIRD-PARTY-NOTICES) for full license text.
+
+## Links
+
+- [Composio Documentation](https://docs.composio.dev)
+- [Tool Router Overview](https://docs.composio.dev/tool-router/overview)
+- [Composio Platform](https://platform.composio.dev)
