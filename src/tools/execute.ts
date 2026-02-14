@@ -40,9 +40,13 @@ export function createComposioExecuteTool(client: ComposioClient, _config: Compo
         };
       }
 
+      let rawArgs = params.arguments;
+      if (typeof rawArgs === "string") {
+        try { rawArgs = JSON.parse(rawArgs); } catch {}
+      }
       const args =
-        params.arguments && typeof params.arguments === "object" && !Array.isArray(params.arguments)
-          ? (params.arguments as Record<string, unknown>)
+        rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
+          ? (rawArgs as Record<string, unknown>)
           : {};
 
       const userId = typeof params.user_id === "string" ? params.user_id : undefined;

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { ComposioClient } from "./client.js";
 import { parseComposioConfig } from "./config.js";
+import { createComposioExecuteTool } from "./tools/execute.js";
 
 // Mock the Composio SDK
 vi.mock("@composio/core", () => ({
@@ -159,5 +160,48 @@ describe("session caching", () => {
     const { Composio } = await import("@composio/core");
     const instance = (Composio as any).mock.results[0].value;
     expect(instance.toolRouter.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("execute tool string arguments (GLM-5 workaround)", () => {
+  function makeTool() {
+    const client = makeClient();
+    const config = parseComposioConfig({ config: { apiKey: "test-key" } });
+    return createComposioExecuteTool(client, config);
+  }
+
+  it("parses string arguments as JSON", async () => {
+    const tool = makeTool();
+    const result = await tool.execute("test", {
+      tool_slug: "GMAIL_FETCH_EMAILS",
+      arguments: '{"user_id": "me", "max_results": 5}',
+    });
+    expect(result.details).toHaveProperty("success", true);
+  });
+
+  it("handles object arguments normally", async () => {
+    const tool = makeTool();
+    const result = await tool.execute("test", {
+      tool_slug: "GMAIL_FETCH_EMAILS",
+      arguments: { user_id: "me", max_results: 5 },
+    });
+    expect(result.details).toHaveProperty("success", true);
+  });
+
+  it("falls back to empty args on invalid JSON string", async () => {
+    const tool = makeTool();
+    const result = await tool.execute("test", {
+      tool_slug: "GMAIL_FETCH_EMAILS",
+      arguments: "not valid json",
+    });
+    expect(result.details).toHaveProperty("success", true);
+  });
+
+  it("falls back to empty args when arguments is missing", async () => {
+    const tool = makeTool();
+    const result = await tool.execute("test", {
+      tool_slug: "GMAIL_FETCH_EMAILS",
+    });
+    expect(result.details).toHaveProperty("success", true);
   });
 });
