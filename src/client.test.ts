@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { ComposioClient } from "./client.js";
 import { parseComposioConfig } from "./config.js";
 import { createComposioExecuteTool } from "./tools/execute.js";
+import { createComposioConnectionsTool } from "./tools/connections.js";
 
 // Mock the Composio SDK
 vi.mock("@composio/core", () => ({
@@ -16,6 +17,7 @@ vi.mock("@composio/core", () => ({
             { slug: "gmail", name: "Gmail", connection: { isActive: true } },
             { slug: "sentry", name: "Sentry", connection: { isActive: false } },
             { slug: "github", name: "GitHub", connection: { isActive: true } },
+            { slug: "affinity", name: "Affinity", connection: { isActive: false } },
           ],
         }),
         experimental: { assistivePrompt: "" },
@@ -203,5 +205,52 @@ describe("execute tool string arguments (GLM-5 workaround)", () => {
       tool_slug: "GMAIL_FETCH_EMAILS",
     });
     expect(result.details).toHaveProperty("success", true);
+  });
+});
+
+describe("connections tool", () => {
+  function makeConnectionsTool() {
+    const client = makeClient();
+    const config = parseComposioConfig({ config: { apiKey: "test-key" } });
+    return createComposioConnectionsTool(client, config);
+  }
+
+  it("list action passes user_id to client", async () => {
+    const tool = makeConnectionsTool();
+    const result = await tool.execute("test", { action: "list", user_id: "custom-user" });
+    const details = result.details as any;
+    expect(details).toHaveProperty("action", "list");
+    expect(details.toolkits).toBeInstanceOf(Array);
+  });
+
+  it("status probes API-key toolkit and flips to connected on success", async () => {
+    const tool = makeConnectionsTool();
+    const result = await tool.execute("test", { action: "status", toolkit: "affinity" });
+    const details = result.details as any;
+    const conn = details.connections.find((c: any) => c.toolkit === "affinity");
+    expect(conn.connected).toBe(true);
+  });
+
+  it("status does not probe toolkits without a defined probe", async () => {
+    const tool = makeConnectionsTool();
+    const result = await tool.execute("test", { action: "status", toolkit: "sentry" });
+    const details = result.details as any;
+    const conn = details.connections.find((c: any) => c.toolkit === "sentry");
+    expect(conn.connected).toBe(false);
+  });
+
+  it("status keeps disconnected when probe fails", async () => {
+    const tool = makeConnectionsTool();
+
+    // Get the latest Composio instance (the one this tool's client is using)
+    const { Composio } = await import("@composio/core");
+    const mockResults = (Composio as any).mock.results;
+    const instance = mockResults[mockResults.length - 1].value;
+    instance.client.tools.execute.mockRejectedValueOnce(new Error("probe failed"));
+
+    const result = await tool.execute("test", { action: "status", toolkit: "affinity" });
+    const details = result.details as any;
+    const conn = details.connections.find((c: any) => c.toolkit === "affinity");
+    expect(conn.connected).toBe(false);
   });
 });
