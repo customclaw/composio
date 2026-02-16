@@ -44,8 +44,9 @@ export function createComposioConnectionsTool(client: ComposioClient, _config: C
     name: "composio_manage_connections",
     label: "Composio Manage Connections",
     description:
-      "Manage Composio toolkit connections. Check connection status, create new auth links, " +
-      "or list available toolkits. Use this before executing tools to ensure authentication.",
+      "Manage Composio toolkit connections. Use action='status' to check if a toolkit is connected, " +
+      "action='create' to generate an auth URL when disconnected, or action='list' to see available toolkits. " +
+      "Check connection status before executing tools with composio_execute_tool.",
     parameters: ComposioManageConnectionsToolSchema,
 
     async execute(_toolCallId: string, params: Record<string, unknown>) {

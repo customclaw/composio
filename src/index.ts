@@ -91,23 +91,6 @@ const composioPlugin = {
       { commands: ["composio"] }
     );
 
-    // Inject agent instructions via before_agent_start hook
-    api.on("before_agent_start", () => {
-      return {
-        prependContext: `<composio-tools>
-You have access to Composio tools for third-party integrations (Gmail, Sentry, etc.).
-
-## Usage
-1. Use \`composio_search_tools\` to find tools and their parameter schemas.
-2. Use \`composio_manage_connections\` with action="status" to check if a toolkit is connected. Use action="create" to generate an auth URL if needed.
-3. Use \`composio_execute_tool\` with the tool_slug and arguments from search results.
-
-Always search first to get the correct parameter schema before executing a tool.
-Tool slugs are uppercase. If a tool fails with auth errors, prompt the user to connect the toolkit.
-</composio-tools>`,
-      };
-    });
-
     api.logger.info("[composio] Plugin registered with 3 tools and CLI commands");
   },
 };

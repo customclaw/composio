@@ -27,8 +27,9 @@ export function createComposioExecuteTool(client: ComposioClient, _config: Compo
     name: "composio_execute_tool",
     label: "Composio Execute Tool",
     description:
-      "Execute a single Composio tool. Use composio_search_tools first to find the tool slug " +
-      "and parameter schema. The tool must be connected (use composio_manage_connections to check).",
+      "Execute a single Composio tool. Use composio_search_tools first to find the UPPERCASE tool slug " +
+      "and parameter schema. The toolkit must be connected — use composio_manage_connections to check " +
+      "status or create an auth link. If execution fails with auth errors, prompt the user to reconnect.",
     parameters: ComposioExecuteToolSchema,
 
     async execute(_toolCallId: string, params: Record<string, unknown>) {

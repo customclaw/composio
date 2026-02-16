@@ -34,8 +34,9 @@ export function createComposioSearchTool(client: ComposioClient, _config: Compos
     name: "composio_search_tools",
     label: "Composio Search Tools",
     description:
-      "Search for tools across 1000+ integrations (Gmail, Slack, GitHub, Notion, etc.) " +
-      "by describing what you want to accomplish. Returns matching tools with their schemas.",
+      "Search for Composio tools across 1000+ integrations (Gmail, Slack, GitHub, Notion, etc.) " +
+      "by describing what you want to accomplish. Returns matching tools with their UPPERCASE slugs and parameter schemas. " +
+      "Always search first before executing a tool with composio_execute_tool.",
     parameters: ComposioSearchToolSchema,
 
     async execute(_toolCallId: string, params: Record<string, unknown>) {
