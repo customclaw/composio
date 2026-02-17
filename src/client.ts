@@ -13,7 +13,13 @@ interface ToolRouterSession {
   sessionId: string;
   tools: () => Promise<unknown[]>;
   authorize: (toolkit: string) => Promise<{ url: string }>;
-  toolkits: () => Promise<{
+  toolkits: (options?: {
+    nextCursor?: string;
+    toolkits?: string[];
+    limit?: number;
+    isConnected?: boolean;
+    search?: string;
+  }) => Promise<{
     items: Array<{
       slug: string;
       name: string;
@@ -22,6 +28,8 @@ interface ToolRouterSession {
         connectedAccount?: { id: string; status: string };
       };
     }>;
+    nextCursor?: string;
+    totalPages?: number;
   }>;
   experimental: { assistivePrompt: string };
 }
@@ -246,45 +254,122 @@ export class ComposioClient {
     const session = await this.getSession(uid);
 
     try {
-      const response = await session.toolkits();
-      const allToolkits = response.items || [];
-
-      const statuses: ConnectionStatus[] = [];
-
       if (toolkits && toolkits.length > 0) {
-        // Check specific toolkits
-        for (const toolkit of toolkits) {
-          if (!this.isToolkitAllowed(toolkit)) continue;
+        const requestedToolkits = toolkits.filter(t => this.isToolkitAllowed(t));
+        if (requestedToolkits.length === 0) return [];
+        const toolkitStateMap = await this.getToolkitStateMap(session, requestedToolkits);
+        const activeAccountToolkits = await this.getActiveConnectedAccountToolkits(uid, requestedToolkits);
 
-          const found = allToolkits.find(
-            t => t.slug.toLowerCase() === toolkit.toLowerCase()
-          );
-
-          statuses.push({
+        return requestedToolkits.map((toolkit) => {
+          const key = toolkit.toLowerCase();
+          return {
             toolkit,
-            connected: found?.connection?.isActive ?? false,
+            connected: (toolkitStateMap.get(key) ?? false) || activeAccountToolkits.has(key),
             userId: uid,
-          });
-        }
-      } else {
-        // Return all connected toolkits
-        for (const tk of allToolkits) {
-          if (!this.isToolkitAllowed(tk.slug)) continue;
-          if (!tk.connection?.isActive) continue;
-
-          statuses.push({
-            toolkit: tk.slug,
-            connected: true,
-            userId: uid,
-          });
-        }
+          };
+        });
       }
 
-      return statuses;
+      const toolkitStateMap = await this.getToolkitStateMap(session);
+      const activeAccountToolkits = await this.getActiveConnectedAccountToolkits(uid);
+      const connected = new Set<string>();
+
+      for (const [slug, isActive] of toolkitStateMap.entries()) {
+        if (!isActive) continue;
+        if (!this.isToolkitAllowed(slug)) continue;
+        connected.add(slug);
+      }
+      for (const slug of activeAccountToolkits) {
+        if (!this.isToolkitAllowed(slug)) continue;
+        connected.add(slug);
+      }
+
+      return Array.from(connected).map((toolkit) => ({
+        toolkit,
+        connected: true,
+        userId: uid,
+      }));
     } catch (err) {
       throw new Error(
         `Failed to get connection status: ${err instanceof Error ? err.message : String(err)}`
       );
+    }
+  }
+
+  private async getToolkitStateMap(
+    session: ToolRouterSession,
+    toolkits?: string[]
+  ): Promise<Map<string, boolean>> {
+    const map = new Map<string, boolean>();
+    let nextCursor: string | undefined;
+    const seenCursors = new Set<string>();
+
+    do {
+      const response = await session.toolkits({
+        nextCursor,
+        limit: 100,
+        ...(toolkits && toolkits.length > 0 ? { toolkits } : { isConnected: true }),
+      });
+
+      const items = response.items || [];
+      for (const tk of items) {
+        const key = tk.slug.toLowerCase();
+        const isActive = tk.connection?.isActive ?? false;
+        map.set(key, (map.get(key) ?? false) || isActive);
+      }
+
+      nextCursor = response.nextCursor;
+      if (!nextCursor) break;
+      if (seenCursors.has(nextCursor)) break;
+      seenCursors.add(nextCursor);
+    } while (true);
+
+    return map;
+  }
+
+  private async getActiveConnectedAccountToolkits(
+    userId: string,
+    toolkits?: string[]
+  ): Promise<Set<string>> {
+    const connected = new Set<string>();
+    let cursor: string | null | undefined;
+    const seenCursors = new Set<string>();
+
+    try {
+      do {
+        const response = await (this.client as any).connectedAccounts.list({
+          userIds: [userId],
+          statuses: ["ACTIVE"],
+          ...(toolkits && toolkits.length > 0 ? { toolkitSlugs: toolkits } : {}),
+          limit: 100,
+          ...(cursor ? { cursor } : {}),
+        });
+
+        const items = (
+          Array.isArray(response)
+            ? response
+            : (response as { items?: unknown[] })?.items || []
+        ) as Array<{ toolkit?: { slug?: string }; status?: string }>;
+
+        for (const item of items) {
+          const slug = item.toolkit?.slug;
+          if (!slug) continue;
+          if (item.status && String(item.status).toUpperCase() !== "ACTIVE") continue;
+          connected.add(slug.toLowerCase());
+        }
+
+        cursor = Array.isArray(response)
+          ? null
+          : ((response as { nextCursor?: string | null })?.nextCursor ?? null);
+        if (!cursor) break;
+        if (seenCursors.has(cursor)) break;
+        seenCursors.add(cursor);
+      } while (true);
+
+      return connected;
+    } catch {
+      // Best-effort fallback: preserve status checks based on session.toolkits only.
+      return connected;
     }
   }
 
@@ -348,7 +433,7 @@ export class ComposioClient {
     const uid = this.getUserId(userId);
 
     try {
-      const response = await (this.client as any).connectedAccounts.list({ userId: uid });
+      const response = await (this.client as any).connectedAccounts.list({ userIds: [uid] });
       const connections = (
         Array.isArray(response)
           ? response

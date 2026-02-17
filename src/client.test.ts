@@ -46,6 +46,12 @@ function makeClient(overrides?: Partial<ReturnType<typeof parseComposioConfig>>)
   });
 }
 
+async function getLatestComposioInstance() {
+  const { Composio } = await import("@composio/core");
+  const mockResults = (Composio as any).mock.results;
+  return mockResults[mockResults.length - 1].value;
+}
+
 describe("config parsing", () => {
   it("reads apiKey from config object", () => {
     const config = parseComposioConfig({ config: { apiKey: "from-config" } });
@@ -110,6 +116,18 @@ describe("connection status", () => {
     const client = makeClient();
     const statuses = await client.getConnectionStatus(["sentry"]);
     expect(statuses[0].connected).toBe(false);
+  });
+
+  it("reports toolkit as connected when active connected account exists", async () => {
+    const client = makeClient();
+    const instance = await getLatestComposioInstance();
+    instance.connectedAccounts.list.mockResolvedValueOnce({
+      items: [{ toolkit: { slug: "affinity" }, status: "ACTIVE" }],
+      nextCursor: null,
+    });
+
+    const statuses = await client.getConnectionStatus(["affinity"]);
+    expect(statuses[0].connected).toBe(true);
   });
 
   it("returns only connected toolkits when no filter", async () => {
@@ -217,40 +235,34 @@ describe("connections tool", () => {
 
   it("list action passes user_id to client", async () => {
     const tool = makeConnectionsTool();
-    const result = await tool.execute("test", { action: "list", user_id: "custom-user" });
-    const details = result.details as any;
-    expect(details).toHaveProperty("action", "list");
-    expect(details.toolkits).toBeInstanceOf(Array);
+    await tool.execute("test", { action: "list", user_id: "custom-user" });
+    const instance = await getLatestComposioInstance();
+    expect(instance.toolRouter.create).toHaveBeenCalledWith("custom-user");
   });
 
-  it("status probes API-key toolkit and flips to connected on success", async () => {
+  it("status uses active connected accounts as fallback", async () => {
     const tool = makeConnectionsTool();
+    const instance = await getLatestComposioInstance();
+    instance.connectedAccounts.list.mockResolvedValueOnce({
+      items: [{ toolkit: { slug: "affinity" }, status: "ACTIVE" }],
+      nextCursor: null,
+    });
+
     const result = await tool.execute("test", { action: "status", toolkit: "affinity" });
     const details = result.details as any;
     const conn = details.connections.find((c: any) => c.toolkit === "affinity");
     expect(conn.connected).toBe(true);
+    expect(instance.client.tools.execute).not.toHaveBeenCalledWith(
+      "AFFINITY_GET_METADATA_ON_ALL_LISTS",
+      expect.anything()
+    );
   });
 
-  it("status does not probe toolkits without a defined probe", async () => {
+  it("status keeps disconnected when no active account exists", async () => {
     const tool = makeConnectionsTool();
     const result = await tool.execute("test", { action: "status", toolkit: "sentry" });
     const details = result.details as any;
     const conn = details.connections.find((c: any) => c.toolkit === "sentry");
-    expect(conn.connected).toBe(false);
-  });
-
-  it("status keeps disconnected when probe fails", async () => {
-    const tool = makeConnectionsTool();
-
-    // Get the latest Composio instance (the one this tool's client is using)
-    const { Composio } = await import("@composio/core");
-    const mockResults = (Composio as any).mock.results;
-    const instance = mockResults[mockResults.length - 1].value;
-    instance.client.tools.execute.mockRejectedValueOnce(new Error("probe failed"));
-
-    const result = await tool.execute("test", { action: "status", toolkit: "affinity" });
-    const details = result.details as any;
-    const conn = details.connections.find((c: any) => c.toolkit === "affinity");
     expect(conn.connected).toBe(false);
   });
 });

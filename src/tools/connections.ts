@@ -2,13 +2,6 @@ import { Type } from "@sinclair/typebox";
 import type { ComposioClient } from "../client.js";
 import type { ComposioConfig } from "../types.js";
 
-const CONNECTION_PROBES: Record<string, { toolSlug: string; args: Record<string, unknown> }> = {
-  affinity: {
-    toolSlug: "AFFINITY_GET_METADATA_ON_ALL_LISTS",
-    args: { limit: 1 },
-  },
-};
-
 /**
  * Tool parameters for composio_manage_connections
  */
@@ -111,22 +104,6 @@ export function createComposioConnectionsTool(client: ComposioClient, _config: C
             }
 
             const statuses = await client.getConnectionStatus(toolkitsToCheck, userId);
-
-            // Fallback probe for API-key style integrations where
-            // connection.isActive can be false despite successful tool execution
-            if (toolkitsToCheck && toolkitsToCheck.length > 0) {
-              for (const status of statuses) {
-                if (status.connected) continue;
-                const probe = CONNECTION_PROBES[String(status.toolkit || "").toLowerCase()];
-                if (!probe) continue;
-                try {
-                  const probeResult = await client.executeTool(probe.toolSlug, probe.args, userId);
-                  if (probeResult?.success) status.connected = true;
-                } catch {
-                  // keep false if probe fails
-                }
-              }
-            }
 
             const response = {
               action: "status",
