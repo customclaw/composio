@@ -286,6 +286,42 @@ describe("create connection", () => {
   });
 });
 
+describe("disconnect toolkit", () => {
+  it("disconnects single active account", async () => {
+    const client = makeClient();
+    const instance = await getLatestComposioInstance();
+
+    instance.client.connectedAccounts.list.mockResolvedValueOnce({
+      items: [
+        { id: "ca_gmail", user_id: "default", status: "ACTIVE", toolkit: { slug: "gmail" } },
+      ],
+      next_cursor: null,
+    });
+
+    const result = await client.disconnectToolkit("gmail", "default");
+    expect(result.success).toBe(true);
+    expect(instance.connectedAccounts.delete).toHaveBeenCalledWith({ connectedAccountId: "ca_gmail" });
+  });
+
+  it("fails safely when multiple active accounts exist", async () => {
+    const client = makeClient();
+    const instance = await getLatestComposioInstance();
+
+    instance.client.connectedAccounts.list.mockResolvedValueOnce({
+      items: [
+        { id: "ca_1", user_id: "default", status: "ACTIVE", toolkit: { slug: "gmail" } },
+        { id: "ca_2", user_id: "default", status: "ACTIVE", toolkit: { slug: "gmail" } },
+      ],
+      next_cursor: null,
+    });
+
+    const result = await client.disconnectToolkit("gmail", "default");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Multiple ACTIVE 'gmail' accounts");
+    expect(instance.connectedAccounts.delete).not.toHaveBeenCalled();
+  });
+});
+
 describe("connected accounts discovery", () => {
   it("lists connected accounts with user IDs from raw API", async () => {
     const client = makeClient();

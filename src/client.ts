@@ -791,22 +791,27 @@ export class ComposioClient {
     const uid = this.getUserId(userId);
 
     try {
-      const response = await (this.client as any).connectedAccounts.list({ userIds: [uid] });
-      const connections = (
-        Array.isArray(response)
-          ? response
-          : (response as { items?: unknown[] })?.items || []
-      ) as Array<{ toolkit?: { slug?: string }; id: string }>;
+      const activeAccounts = await this.listConnectedAccounts({
+        toolkits: [toolkit],
+        userIds: [uid],
+        statuses: ["ACTIVE"],
+      });
 
-      const conn = connections.find(
-        c => c.toolkit?.slug?.toLowerCase() === toolkit.toLowerCase()
-      );
-
-      if (!conn) {
+      if (activeAccounts.length === 0) {
         return { success: false, error: `No connection found for toolkit '${toolkit}'` };
       }
 
-      await (this.client as any).connectedAccounts.delete({ connectedAccountId: conn.id });
+      if (activeAccounts.length > 1) {
+        const ids = activeAccounts.map(a => a.id).join(", ");
+        return {
+          success: false,
+          error:
+            `Multiple ACTIVE '${toolkit}' accounts found for user_id '${uid}': ${ids}. ` +
+            "Use the dashboard to disconnect a specific account.",
+        };
+      }
+
+      await (this.client as any).connectedAccounts.delete({ connectedAccountId: activeAccounts[0]!.id });
 
       // Clear session cache to refresh connection status
       this.clearUserSessionCache(uid);
