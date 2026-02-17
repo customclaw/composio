@@ -267,6 +267,59 @@ describe("execute tool", () => {
       dangerouslySkipVersionCheck: true,
     });
   });
+
+  it("retries once with server-hinted identifier value", async () => {
+    const client = makeClient();
+    const instance = await getLatestComposioInstance();
+
+    instance.client.connectedAccounts.list.mockResolvedValueOnce({
+      items: [
+        { id: "ca_posthog", user_id: "pg-user", status: "ACTIVE", toolkit: { slug: "posthog" } },
+      ],
+      next_cursor: null,
+    });
+
+    instance.client.tools.execute.mockResolvedValueOnce({
+      successful: true,
+      data: {
+        results: [
+          {
+            tool_slug: "POSTHOG_RETRIEVE_USER_PROFILE_AND_TEAM_DETAILS",
+            index: 0,
+            response: {
+              successful: false,
+              error: JSON.stringify({
+                type: "authentication_error",
+                code: "permission_denied",
+                detail: "As a non-staff user you're only allowed to access the `@me` user instance.",
+                attr: null,
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    instance.tools.execute.mockResolvedValueOnce({
+      successful: true,
+      data: { ok: true, retried: true },
+    });
+
+    const result = await client.executeTool(
+      "POSTHOG_RETRIEVE_USER_PROFILE_AND_TEAM_DETAILS",
+      { uuid: "some-other-uuid" },
+      "pg-user"
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({ ok: true, retried: true });
+    expect(instance.tools.execute).toHaveBeenCalledWith("POSTHOG_RETRIEVE_USER_PROFILE_AND_TEAM_DETAILS", {
+      userId: "pg-user",
+      connectedAccountId: "ca_posthog",
+      arguments: { uuid: "@me" },
+      dangerouslySkipVersionCheck: true,
+    });
+  });
 });
 
 describe("create connection", () => {

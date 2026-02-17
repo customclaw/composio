@@ -255,7 +255,7 @@ export class ComposioClient {
       });
 
       if (!response.successful) {
-        const fallback = await this.tryDirectExecutionFallback({
+        const recovered = await this.tryExecutionRecovery({
           uid,
           toolSlug,
           args,
@@ -263,7 +263,7 @@ export class ComposioClient {
           metaError: response.error,
           metaData: response.data,
         });
-        if (fallback) return fallback;
+        if (recovered) return recovered;
         return { success: false, error: response.error || "Execution failed" };
       }
 
@@ -285,7 +285,7 @@ export class ComposioClient {
       // Response data is nested under result.response
       const toolResponse = result.response;
       if (!toolResponse.successful) {
-        const fallback = await this.tryDirectExecutionFallback({
+        const recovered = await this.tryExecutionRecovery({
           uid,
           toolSlug,
           args,
@@ -293,7 +293,7 @@ export class ComposioClient {
           metaError: toolResponse.error ?? undefined,
           metaData: response.data,
         });
-        if (fallback) return fallback;
+        if (recovered) return recovered;
       }
 
       return {
@@ -309,6 +309,26 @@ export class ComposioClient {
     }
   }
 
+  private async tryExecutionRecovery(params: {
+    uid: string;
+    toolSlug: string;
+    args: Record<string, unknown>;
+    connectedAccountId?: string;
+    metaError?: string;
+    metaData?: Record<string, unknown>;
+  }): Promise<ToolExecutionResult | null> {
+    const directFallback = await this.tryDirectExecutionFallback(params);
+    if (directFallback?.success) return directFallback;
+
+    const hintedRetry = await this.tryHintedIdentifierRetry({
+      ...params,
+      additionalError: directFallback?.error,
+    });
+    if (hintedRetry) return hintedRetry;
+
+    return directFallback;
+  }
+
   private async tryDirectExecutionFallback(params: {
     uid: string;
     toolSlug: string;
@@ -321,11 +341,25 @@ export class ComposioClient {
       return null;
     }
 
+    return this.executeDirectTool(
+      params.toolSlug,
+      params.uid,
+      params.args,
+      params.connectedAccountId
+    );
+  }
+
+  private async executeDirectTool(
+    toolSlug: string,
+    userId: string,
+    args: Record<string, unknown>,
+    connectedAccountId?: string
+  ): Promise<ToolExecutionResult> {
     try {
-      const response = await (this.client as any).tools.execute(params.toolSlug, {
-        userId: params.uid,
-        connectedAccountId: params.connectedAccountId,
-        arguments: params.args,
+      const response = await (this.client as any).tools.execute(toolSlug, {
+        userId,
+        connectedAccountId,
+        arguments: args,
         dangerouslySkipVersionCheck: true,
       });
 
@@ -342,16 +376,106 @@ export class ComposioClient {
     }
   }
 
+  private async tryHintedIdentifierRetry(params: {
+    uid: string;
+    toolSlug: string;
+    args: Record<string, unknown>;
+    connectedAccountId?: string;
+    metaError?: string;
+    metaData?: Record<string, unknown>;
+    additionalError?: string;
+  }): Promise<ToolExecutionResult | null> {
+    const combined = this.buildCombinedErrorText(params.metaError, params.metaData, params.additionalError);
+    if (!this.shouldRetryFromServerHint(combined)) return null;
+
+    const hint = this.extractServerHintLiteral(combined);
+    if (!hint) return null;
+
+    const retryArgs = this.buildRetryArgsFromHint(params.args, combined, hint);
+    if (!retryArgs) return null;
+
+    return this.executeDirectTool(
+      params.toolSlug,
+      params.uid,
+      retryArgs,
+      params.connectedAccountId
+    );
+  }
+
   private shouldFallbackToDirectExecution(
     uid: string,
     metaError?: string,
     metaData?: Record<string, unknown>
   ): boolean {
     if (uid === "default") return false;
-    const base = String(metaError || "");
-    const nested = this.extractNestedMetaError(metaData);
-    const combined = `${base}\n${nested}`.toLowerCase();
+    const combined = this.buildCombinedErrorText(metaError, metaData).toLowerCase();
     return combined.includes("no connected account found for entity id default");
+  }
+
+  private shouldRetryFromServerHint(errorText: string): boolean {
+    const lower = errorText.toLowerCase();
+    return (
+      lower.includes("only allowed to access") ||
+      lower.includes("allowed to access the")
+    );
+  }
+
+  private extractServerHintLiteral(errorText: string): string | undefined {
+    const matches = errorText.match(/`([^`]+)`/);
+    if (!matches?.[1]) return undefined;
+    const literal = matches[1].trim();
+    if (!literal) return undefined;
+    if (literal.length > 64) return undefined;
+    if (/\s/.test(literal)) return undefined;
+    return literal;
+  }
+
+  private buildRetryArgsFromHint(
+    args: Record<string, unknown>,
+    errorText: string,
+    hint: string
+  ): Record<string, unknown> | null {
+    const stringEntries = Object.entries(args).filter(
+      ([, value]) => typeof value === "string"
+    ) as Array<[string, string]>;
+
+    if (stringEntries.length === 1) {
+      const [field, current] = stringEntries[0];
+      if (current === hint) return null;
+      return { ...args, [field]: hint };
+    }
+
+    if (stringEntries.length === 0) {
+      const missing = this.extractSingleMissingField(errorText);
+      if (!missing) return null;
+      return { ...args, [missing]: hint };
+    }
+
+    return null;
+  }
+
+  private extractSingleMissingField(errorText: string): string | undefined {
+    const match = errorText.match(/following fields are missing:\s*\{([^}]+)\}/i);
+    const raw = match?.[1];
+    if (!raw) return undefined;
+
+    const fields = raw
+      .split(",")
+      .map(part => part.trim().replace(/^['"]|['"]$/g, ""))
+      .filter(Boolean);
+
+    return fields.length === 1 ? fields[0] : undefined;
+  }
+
+  private buildCombinedErrorText(
+    metaError?: string,
+    metaData?: Record<string, unknown>,
+    additionalError?: string
+  ): string {
+    return [metaError, this.extractNestedMetaError(metaData), additionalError]
+      .map(v => String(v || "").trim())
+      .filter(Boolean)
+      .join("\n");
   }
 
   private extractNestedMetaError(metaData?: Record<string, unknown>): string {
