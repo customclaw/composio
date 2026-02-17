@@ -42,6 +42,8 @@ The plugin gives your agent two tools:
 - `composio_execute_tool` — runs a Composio action (e.g. `GMAIL_FETCH_EMAILS`, `SENTRY_LIST_ISSUES`)
 - `composio_manage_connections` — checks connection status and generates OAuth links when a toolkit isn't connected yet
 
+`composio_execute_tool` also accepts optional `user_id` and `connected_account_id` fields for deterministic account selection when multiple accounts exist.
+
 The agent handles the rest. Ask it to "check my latest emails" and it will call the right tool, prompt you to connect Gmail if needed, and fetch the results.
 
 ## CLI

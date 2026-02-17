@@ -17,6 +17,11 @@ export const ComposioExecuteToolSchema = Type.Object({
       description: "User ID for session scoping (uses default if not provided)",
     })
   ),
+  connected_account_id: Type.Optional(
+    Type.String({
+      description: "Optional connected account ID to pin execution to a specific account when multiple are connected",
+    })
+  ),
 });
 
 /**
@@ -51,9 +56,11 @@ export function createComposioExecuteTool(client: ComposioClient, _config: Compo
           : {};
 
       const userId = typeof params.user_id === "string" ? params.user_id : undefined;
+      const connectedAccountId =
+        typeof params.connected_account_id === "string" ? params.connected_account_id : undefined;
 
       try {
-        const result = await client.executeTool(toolSlug, args, userId);
+        const result = await client.executeTool(toolSlug, args, userId, connectedAccountId);
 
         const response = {
           tool_slug: toolSlug,

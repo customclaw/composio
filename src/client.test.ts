@@ -36,6 +36,7 @@ vi.mock("@composio/core", () => ({
     },
     connectedAccounts: {
       list: vi.fn().mockResolvedValue({ items: [] }),
+      get: vi.fn().mockResolvedValue({ toolkit: { slug: "gmail" }, status: "ACTIVE" }),
       delete: vi.fn().mockResolvedValue({}),
     },
   })),
@@ -154,6 +155,56 @@ describe("execute tool", () => {
     const result = await client.executeTool("GMAIL_FETCH_EMAILS", {});
     expect(result.success).toBe(false);
     expect(result.error).toContain("not allowed");
+  });
+
+  it("pins execution to explicit connected_account_id", async () => {
+    const client = makeClient();
+    const instance = await getLatestComposioInstance();
+    instance.connectedAccounts.get.mockResolvedValueOnce({
+      toolkit: { slug: "gmail" },
+      status: "ACTIVE",
+    });
+
+    const result = await client.executeTool("GMAIL_FETCH_EMAILS", {}, "default", "ca_explicit");
+    expect(result.success).toBe(true);
+    expect(instance.toolRouter.create).toHaveBeenCalledWith("default", {
+      connectedAccounts: { gmail: "ca_explicit" },
+    });
+  });
+
+  it("auto-pins execution when one active account exists", async () => {
+    const client = makeClient();
+    const instance = await getLatestComposioInstance();
+    instance.client.connectedAccounts.list.mockResolvedValueOnce({
+      items: [
+        { id: "ca_single", user_id: "default", status: "ACTIVE", toolkit: { slug: "gmail" } },
+      ],
+      next_cursor: null,
+    });
+
+    const result = await client.executeTool("GMAIL_FETCH_EMAILS", {}, "default");
+    expect(result.success).toBe(true);
+    expect(instance.toolRouter.create).toHaveBeenCalledWith("default", {
+      connectedAccounts: { gmail: "ca_single" },
+    });
+  });
+
+  it("fails with clear error when multiple active accounts exist and none selected", async () => {
+    const client = makeClient();
+    const instance = await getLatestComposioInstance();
+    instance.client.connectedAccounts.list.mockResolvedValueOnce({
+      items: [
+        { id: "ca_1", user_id: "default", status: "ACTIVE", toolkit: { slug: "gmail" } },
+        { id: "ca_2", user_id: "default", status: "ACTIVE", toolkit: { slug: "gmail" } },
+      ],
+      next_cursor: null,
+    });
+
+    const result = await client.executeTool("GMAIL_FETCH_EMAILS", {}, "default");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Multiple ACTIVE 'gmail' accounts");
+    expect(result.error).toContain("ca_1");
+    expect(result.error).toContain("ca_2");
   });
 });
 
@@ -316,7 +367,7 @@ describe("connections tool", () => {
     const tool = makeConnectionsTool();
     await tool.execute("test", { action: "list", user_id: "custom-user" });
     const instance = await getLatestComposioInstance();
-    expect(instance.toolRouter.create).toHaveBeenCalledWith("custom-user");
+    expect(instance.toolRouter.create).toHaveBeenCalledWith("custom-user", undefined);
   });
 
   it("status uses active connected accounts as fallback", async () => {

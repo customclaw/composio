@@ -35,6 +35,8 @@ interface ToolRouterSession {
   experimental: { assistivePrompt: string };
 }
 
+type SessionConnectedAccountsOverride = Record<string, string>;
+
 /**
  * Composio client wrapper using Tool Router pattern
  */
@@ -63,13 +65,39 @@ export class ComposioClient {
   /**
    * Get or create a Tool Router session for a user
    */
-  private async getSession(userId: string): Promise<ToolRouterSession> {
-    if (this.sessionCache.has(userId)) {
-      return this.sessionCache.get(userId)!;
+  private makeSessionCacheKey(userId: string, connectedAccounts?: SessionConnectedAccountsOverride): string {
+    if (!connectedAccounts || Object.keys(connectedAccounts).length === 0) {
+      return `uid:${userId}`;
     }
-    const session = await (this.client as any).toolRouter.create(userId) as ToolRouterSession;
-    this.sessionCache.set(userId, session);
+    const normalized = Object.entries(connectedAccounts)
+      .map(([toolkit, accountId]) => `${toolkit.toLowerCase()}=${accountId}`)
+      .sort()
+      .join(",");
+    return `uid:${userId}::ca:${normalized}`;
+  }
+
+  private async getSession(
+    userId: string,
+    connectedAccounts?: SessionConnectedAccountsOverride
+  ): Promise<ToolRouterSession> {
+    const key = this.makeSessionCacheKey(userId, connectedAccounts);
+    if (this.sessionCache.has(key)) {
+      return this.sessionCache.get(key)!;
+    }
+    const session = await (this.client as any).toolRouter.create(
+      userId,
+      connectedAccounts ? { connectedAccounts } : undefined
+    ) as ToolRouterSession;
+    this.sessionCache.set(key, session);
     return session;
+  }
+
+  private clearUserSessionCache(userId: string) {
+    const prefix = `uid:${userId}`;
+    for (const key of this.sessionCache.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      this.sessionCache.delete(key);
+    }
   }
 
   /**
@@ -190,10 +218,10 @@ export class ComposioClient {
   async executeTool(
     toolSlug: string,
     args: Record<string, unknown>,
-    userId?: string
+    userId?: string,
+    connectedAccountId?: string
   ): Promise<ToolExecutionResult> {
     const uid = this.getUserId(userId);
-    const session = await this.getSession(uid);
 
     const toolkit = toolSlug.split("_")[0]?.toLowerCase() || "";
     if (!this.isToolkitAllowed(toolkit)) {
@@ -202,6 +230,22 @@ export class ComposioClient {
         error: `Toolkit '${toolkit}' is not allowed by plugin configuration`,
       };
     }
+
+    const accountResolution = await this.resolveConnectedAccountForExecution({
+      toolkit,
+      userId: uid,
+      connectedAccountId,
+    });
+    if ("error" in accountResolution) {
+      return { success: false, error: accountResolution.error };
+    }
+
+    const session = await this.getSession(
+      uid,
+      accountResolution.connectedAccountId
+        ? { [toolkit]: accountResolution.connectedAccountId }
+        : undefined
+    );
 
     try {
       const response = await this.executeMetaTool("COMPOSIO_MULTI_EXECUTE_TOOL", {
@@ -242,6 +286,59 @@ export class ComposioClient {
         error: err instanceof Error ? err.message : String(err),
       };
     }
+  }
+
+  private async resolveConnectedAccountForExecution(params: {
+    toolkit: string;
+    userId: string;
+    connectedAccountId?: string;
+  }): Promise<{ connectedAccountId?: string } | { error: string }> {
+    const { toolkit, userId } = params;
+    const explicitId = params.connectedAccountId?.trim();
+
+    if (explicitId) {
+      try {
+        const account = await (this.client as any).connectedAccounts.get(explicitId) as {
+          status?: string;
+          toolkit?: { slug?: string };
+        };
+        const accountToolkit = String(account?.toolkit?.slug || "").toLowerCase();
+        const accountStatus = String(account?.status || "").toUpperCase();
+
+        if (accountToolkit && accountToolkit !== toolkit) {
+          return {
+            error: `Connected account '${explicitId}' belongs to toolkit '${accountToolkit}', but tool '${toolkit}' was requested.`,
+          };
+        }
+        if (accountStatus && accountStatus !== "ACTIVE") {
+          return {
+            error: `Connected account '${explicitId}' is '${accountStatus}', not ACTIVE.`,
+          };
+        }
+        return { connectedAccountId: explicitId };
+      } catch (err) {
+        return {
+          error: `Invalid connected_account_id '${explicitId}': ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    const activeAccounts = await this.listConnectedAccounts({
+      toolkits: [toolkit],
+      userIds: [userId],
+      statuses: ["ACTIVE"],
+    });
+
+    if (activeAccounts.length <= 1) {
+      return { connectedAccountId: activeAccounts[0]?.id };
+    }
+
+    const ids = activeAccounts.map(a => a.id).join(", ");
+    return {
+      error:
+        `Multiple ACTIVE '${toolkit}' accounts found for user_id '${userId}': ${ids}. ` +
+        "Please provide connected_account_id to choose one explicitly.",
+    };
   }
 
   /**
@@ -640,7 +737,7 @@ export class ComposioClient {
       await (this.client as any).connectedAccounts.delete({ connectedAccountId: conn.id });
 
       // Clear session cache to refresh connection status
-      this.sessionCache.delete(uid);
+      this.clearUserSessionCache(uid);
 
       return { success: true };
     } catch (err) {
