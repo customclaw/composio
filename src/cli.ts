@@ -24,14 +24,15 @@ export function registerComposioCli({ program, client, config, logger }: Registe
   composio
     .command("list")
     .description("List available Composio toolkits")
-    .action(async () => {
+    .option("-u, --user-id <userId>", "User ID for session scoping")
+    .action(async (options: { userId?: string }) => {
       if (!config.enabled) {
         logger.error("Composio plugin is disabled");
         return;
       }
 
       try {
-        const toolkits = await client.listToolkits();
+        const toolkits = await client.listToolkits(options.userId);
         console.log("\nAvailable Composio Toolkits:");
         console.log("─".repeat(40));
         for (const toolkit of toolkits.sort()) {
@@ -70,9 +71,64 @@ export function registerComposioCli({ program, client, config, logger }: Registe
             console.log(`  ${icon} ${status.toolkit}: ${state}`);
           }
         }
+
+        if (toolkit && statuses.length === 1 && !statuses[0]?.connected) {
+          const currentUserId = options.userId || config.defaultUserId || "default";
+          const activeUserIds = await client.findActiveUserIdsForToolkit(toolkit);
+          const otherUserIds = activeUserIds.filter((uid) => uid !== currentUserId);
+
+          if (otherUserIds.length > 0) {
+            console.log(`\n  Hint: '${toolkit}' is connected under other user_id(s): ${otherUserIds.join(", ")}`);
+            console.log(`  Try: openclaw composio status ${toolkit} --user-id <user-id>`);
+            console.log(`  Discover accounts: openclaw composio accounts ${toolkit}`);
+          }
+        }
+
         console.log();
       } catch (err) {
         logger.error(`Failed to get status: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
+
+  // openclaw composio accounts [toolkit]
+  composio
+    .command("accounts [toolkit]")
+    .description("List connected accounts (account IDs, user IDs, and statuses)")
+    .option("-u, --user-id <userId>", "Filter by user ID")
+    .option("-s, --statuses <statuses>", "Comma-separated statuses (default: ACTIVE)", "ACTIVE")
+    .action(async (toolkit: string | undefined, options: { userId?: string; statuses: string }) => {
+      if (!config.enabled) {
+        logger.error("Composio plugin is disabled");
+        return;
+      }
+
+      try {
+        const statuses = String(options.statuses || "")
+          .split(",")
+          .map(s => s.trim())
+          .filter(Boolean);
+        const accounts = await client.listConnectedAccounts({
+          toolkits: toolkit ? [toolkit] : undefined,
+          userIds: options.userId ? [options.userId] : undefined,
+          statuses: statuses.length > 0 ? statuses : ["ACTIVE"],
+        });
+
+        console.log("\nComposio Connected Accounts:");
+        console.log("─".repeat(80));
+        if (accounts.length === 0) {
+          console.log("  No connected accounts found");
+          console.log();
+          return;
+        }
+
+        for (const account of accounts) {
+          console.log(
+            `  ${account.id} | toolkit=${account.toolkit} | status=${account.status || "unknown"} | user_id=${account.userId || "hidden"}`
+          );
+        }
+        console.log(`\nTotal: ${accounts.length} connected accounts\n`);
+      } catch (err) {
+        logger.error(`Failed to list connected accounts: ${err instanceof Error ? err.message : String(err)}`);
       }
     });
 
@@ -88,7 +144,9 @@ export function registerComposioCli({ program, client, config, logger }: Registe
       }
 
       try {
+        const currentUserId = options.userId || config.defaultUserId || "default";
         console.log(`\nInitiating connection to ${toolkit}...`);
+        console.log(`Using user_id: ${currentUserId}`);
 
         const result = await client.createConnection(toolkit, options.userId);
 
@@ -101,7 +159,7 @@ export function registerComposioCli({ program, client, config, logger }: Registe
         console.log("─".repeat(40));
         console.log(result.authUrl);
         console.log("\nOpen this URL in your browser to authenticate.");
-        console.log("After authentication, run 'openclaw composio status' to verify.\n");
+        console.log(`After authentication, run 'openclaw composio status ${toolkit} --user-id ${currentUserId}' to verify.\n`);
 
         // Try to open URL in browser
         try {

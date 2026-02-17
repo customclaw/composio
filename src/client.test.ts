@@ -30,6 +30,9 @@ vi.mock("@composio/core", () => ({
           data: { results: [{ tool_slug: "GMAIL_FETCH_EMAILS", index: 0, response: { successful: true, data: { messages: [] } } }] },
         }),
       },
+      connectedAccounts: {
+        list: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
+      },
     },
     connectedAccounts: {
       list: vi.fn().mockResolvedValue({ items: [] }),
@@ -171,6 +174,82 @@ describe("create connection", () => {
   });
 });
 
+describe("connected accounts discovery", () => {
+  it("lists connected accounts with user IDs from raw API", async () => {
+    const client = makeClient();
+    const instance = await getLatestComposioInstance();
+    instance.client.connectedAccounts.list.mockResolvedValueOnce({
+      items: [
+        {
+          id: "ca_1",
+          user_id: "user-a",
+          status: "ACTIVE",
+          toolkit: { slug: "sentry" },
+          auth_config: { id: "ac_1" },
+        },
+      ],
+      next_cursor: null,
+    });
+
+    const accounts = await client.listConnectedAccounts({ toolkits: ["sentry"], statuses: ["ACTIVE"] });
+    expect(accounts).toEqual([
+      {
+        id: "ca_1",
+        toolkit: "sentry",
+        userId: "user-a",
+        status: "ACTIVE",
+        authConfigId: "ac_1",
+        isDisabled: undefined,
+        createdAt: undefined,
+        updatedAt: undefined,
+      },
+    ]);
+  });
+
+  it("falls back to SDK-normalized account list when raw API errors", async () => {
+    const client = makeClient();
+    const instance = await getLatestComposioInstance();
+    instance.client.connectedAccounts.list.mockRejectedValueOnce(new Error("raw unavailable"));
+    instance.connectedAccounts.list.mockResolvedValueOnce({
+      items: [
+        {
+          id: "ca_2",
+          status: "ACTIVE",
+          toolkit: { slug: "gmail" },
+          authConfig: { id: "ac_2" },
+          isDisabled: false,
+        },
+      ],
+      nextCursor: null,
+    });
+
+    const accounts = await client.listConnectedAccounts({ toolkits: ["gmail"], statuses: ["ACTIVE"] });
+    expect(accounts[0]).toMatchObject({
+      id: "ca_2",
+      toolkit: "gmail",
+      status: "ACTIVE",
+      authConfigId: "ac_2",
+      isDisabled: false,
+    });
+  });
+
+  it("finds active user IDs for toolkit", async () => {
+    const client = makeClient();
+    const instance = await getLatestComposioInstance();
+    instance.client.connectedAccounts.list.mockResolvedValueOnce({
+      items: [
+        { id: "ca_1", user_id: "default", status: "ACTIVE", toolkit: { slug: "sentry" } },
+        { id: "ca_2", user_id: "user-b", status: "ACTIVE", toolkit: { slug: "sentry" } },
+        { id: "ca_3", user_id: "default", status: "ACTIVE", toolkit: { slug: "sentry" } },
+      ],
+      next_cursor: null,
+    });
+
+    const userIds = await client.findActiveUserIdsForToolkit("sentry");
+    expect(userIds).toEqual(["default", "user-b"]);
+  });
+});
+
 describe("session caching", () => {
   it("reuses session for same user", async () => {
     const client = makeClient();
@@ -264,5 +343,34 @@ describe("connections tool", () => {
     const details = result.details as any;
     const conn = details.connections.find((c: any) => c.toolkit === "sentry");
     expect(conn.connected).toBe(false);
+  });
+
+  it("accounts action returns connected accounts", async () => {
+    const tool = makeConnectionsTool();
+    const instance = await getLatestComposioInstance();
+    instance.client.connectedAccounts.list.mockResolvedValueOnce({
+      items: [
+        {
+          id: "ca_1",
+          user_id: "user-a",
+          status: "ACTIVE",
+          toolkit: { slug: "sentry" },
+          auth_config: { id: "ac_1" },
+        },
+      ],
+      next_cursor: null,
+    });
+
+    const result = await tool.execute("test", { action: "accounts", toolkit: "sentry" });
+    const details = result.details as any;
+    expect(details.action).toBe("accounts");
+    expect(details.count).toBe(1);
+    expect(details.accounts[0]).toMatchObject({
+      id: "ca_1",
+      toolkit: "sentry",
+      user_id: "user-a",
+      status: "ACTIVE",
+      auth_config_id: "ac_1",
+    });
   });
 });

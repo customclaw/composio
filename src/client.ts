@@ -4,6 +4,7 @@ import type {
   ToolSearchResult,
   ToolExecutionResult,
   ConnectionStatus,
+  ConnectedAccountSummary,
 } from "./types.js";
 
 /**
@@ -373,6 +374,176 @@ export class ComposioClient {
     }
   }
 
+  private normalizeStatuses(statuses?: string[]): string[] | undefined {
+    if (!statuses || statuses.length === 0) return undefined;
+    const allowed = new Set(["INITIALIZING", "INITIATED", "ACTIVE", "FAILED", "EXPIRED", "INACTIVE"]);
+    const normalized = statuses
+      .map(s => String(s || "").trim().toUpperCase())
+      .filter(s => allowed.has(s));
+    return normalized.length > 0 ? Array.from(new Set(normalized)) : undefined;
+  }
+
+  /**
+   * List connected accounts with optional filters.
+   * Uses raw API first to preserve user_id in responses, then falls back to SDK-normalized output.
+   */
+  async listConnectedAccounts(options?: {
+    toolkits?: string[];
+    userIds?: string[];
+    statuses?: string[];
+  }): Promise<ConnectedAccountSummary[]> {
+    const toolkits = options?.toolkits
+      ?.map(t => String(t || "").trim())
+      .filter(t => t.length > 0 && this.isToolkitAllowed(t));
+    const userIds = options?.userIds
+      ?.map(u => String(u || "").trim())
+      .filter(Boolean);
+    const statuses = this.normalizeStatuses(options?.statuses);
+
+    if (options?.toolkits && (!toolkits || toolkits.length === 0)) return [];
+
+    try {
+      return await this.listConnectedAccountsRaw({
+        toolkits,
+        userIds,
+        statuses,
+      });
+    } catch {
+      return this.listConnectedAccountsFallback({
+        toolkits,
+        userIds,
+        statuses,
+      });
+    }
+  }
+
+  /**
+   * Find user IDs that have an active connected account for a toolkit.
+   */
+  async findActiveUserIdsForToolkit(toolkit: string): Promise<string[]> {
+    if (!this.isToolkitAllowed(toolkit)) return [];
+
+    const accounts = await this.listConnectedAccounts({
+      toolkits: [toolkit],
+      statuses: ["ACTIVE"],
+    });
+
+    const userIds = new Set<string>();
+    for (const account of accounts) {
+      if (account.userId) userIds.add(account.userId);
+    }
+    return Array.from(userIds).sort();
+  }
+
+  private async listConnectedAccountsRaw(options?: {
+    toolkits?: string[];
+    userIds?: string[];
+    statuses?: string[];
+  }): Promise<ConnectedAccountSummary[]> {
+    const accounts: ConnectedAccountSummary[] = [];
+    let cursor: string | null | undefined;
+    const seenCursors = new Set<string>();
+
+    do {
+      const response = await (this.client as any).client.connectedAccounts.list({
+        ...(options?.toolkits && options.toolkits.length > 0 ? { toolkit_slugs: options.toolkits } : {}),
+        ...(options?.userIds && options.userIds.length > 0 ? { user_ids: options.userIds } : {}),
+        ...(options?.statuses && options.statuses.length > 0 ? { statuses: options.statuses } : {}),
+        page_size: 100,
+        ...(cursor ? { cursor } : {}),
+      });
+
+      const items = (
+        Array.isArray(response)
+          ? response
+          : (response as { items?: unknown[] })?.items || []
+      ) as Array<Record<string, unknown>>;
+
+      for (const item of items) {
+        const toolkitSlug =
+          ((item.toolkit as { slug?: string } | undefined)?.slug || "").toString().toLowerCase();
+        if (!toolkitSlug) continue;
+        if (!this.isToolkitAllowed(toolkitSlug)) continue;
+
+        accounts.push({
+          id: String(item.id || ""),
+          toolkit: toolkitSlug,
+          userId: typeof item.user_id === "string" ? item.user_id : undefined,
+          status: typeof item.status === "string" ? item.status : undefined,
+          authConfigId: typeof (item.auth_config as { id?: string } | undefined)?.id === "string"
+            ? (item.auth_config as { id?: string }).id
+            : undefined,
+          isDisabled: typeof item.is_disabled === "boolean" ? item.is_disabled : undefined,
+          createdAt: typeof item.created_at === "string" ? item.created_at : undefined,
+          updatedAt: typeof item.updated_at === "string" ? item.updated_at : undefined,
+        });
+      }
+
+      cursor = Array.isArray(response)
+        ? null
+        : ((response as { next_cursor?: string | null })?.next_cursor ?? null);
+      if (!cursor) break;
+      if (seenCursors.has(cursor)) break;
+      seenCursors.add(cursor);
+    } while (true);
+
+    return accounts;
+  }
+
+  private async listConnectedAccountsFallback(options?: {
+    toolkits?: string[];
+    userIds?: string[];
+    statuses?: string[];
+  }): Promise<ConnectedAccountSummary[]> {
+    const accounts: ConnectedAccountSummary[] = [];
+    let cursor: string | null | undefined;
+    const seenCursors = new Set<string>();
+
+    do {
+      const response = await (this.client as any).connectedAccounts.list({
+        ...(options?.toolkits && options.toolkits.length > 0 ? { toolkitSlugs: options.toolkits } : {}),
+        ...(options?.userIds && options.userIds.length > 0 ? { userIds: options.userIds } : {}),
+        ...(options?.statuses && options.statuses.length > 0 ? { statuses: options.statuses } : {}),
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+      });
+
+      const items = (
+        Array.isArray(response)
+          ? response
+          : (response as { items?: unknown[] })?.items || []
+      ) as Array<Record<string, unknown>>;
+
+      for (const item of items) {
+        const toolkitSlug =
+          ((item.toolkit as { slug?: string } | undefined)?.slug || "").toString().toLowerCase();
+        if (!toolkitSlug) continue;
+        if (!this.isToolkitAllowed(toolkitSlug)) continue;
+
+        accounts.push({
+          id: String(item.id || ""),
+          toolkit: toolkitSlug,
+          status: typeof item.status === "string" ? item.status : undefined,
+          authConfigId: typeof (item.authConfig as { id?: string } | undefined)?.id === "string"
+            ? (item.authConfig as { id?: string }).id
+            : undefined,
+          isDisabled: typeof item.isDisabled === "boolean" ? item.isDisabled : undefined,
+          createdAt: typeof item.createdAt === "string" ? item.createdAt : undefined,
+          updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : undefined,
+        });
+      }
+
+      cursor = Array.isArray(response)
+        ? null
+        : ((response as { nextCursor?: string | null })?.nextCursor ?? null);
+      if (!cursor) break;
+      if (seenCursors.has(cursor)) break;
+      seenCursors.add(cursor);
+    } while (true);
+
+    return accounts;
+  }
+
   /**
    * Create an auth connection for a toolkit using session.authorize()
    */
@@ -405,12 +576,30 @@ export class ComposioClient {
 
     try {
       const session = await this.getSession(uid);
-      const response = await session.toolkits();
-      const allToolkits = response.items || [];
+      const seen = new Set<string>();
+      let nextCursor: string | undefined;
+      const seenCursors = new Set<string>();
 
-      return allToolkits
-        .map(tk => tk.slug)
-        .filter(slug => this.isToolkitAllowed(slug));
+      do {
+        const response = await session.toolkits({
+          nextCursor,
+          limit: 100,
+        });
+
+        const allToolkits = response.items || [];
+        for (const tk of allToolkits) {
+          const slug = tk.slug.toLowerCase();
+          if (!this.isToolkitAllowed(slug)) continue;
+          seen.add(slug);
+        }
+
+        nextCursor = response.nextCursor;
+        if (!nextCursor) break;
+        if (seenCursors.has(nextCursor)) break;
+        seenCursors.add(nextCursor);
+      } while (true);
+
+      return Array.from(seen);
     } catch (err: unknown) {
       const errObj = err as { status?: number; error?: { error?: { message?: string } } };
       if (errObj?.status === 401) {

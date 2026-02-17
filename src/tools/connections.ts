@@ -7,9 +7,9 @@ import type { ComposioConfig } from "../types.js";
  */
 export const ComposioManageConnectionsToolSchema = Type.Object({
   action: Type.Union(
-    [Type.Literal("status"), Type.Literal("create"), Type.Literal("list")],
+    [Type.Literal("status"), Type.Literal("create"), Type.Literal("list"), Type.Literal("accounts")],
     {
-      description: "Action to perform: 'status' to check connections, 'create' to initiate auth, 'list' to list toolkits",
+      description: "Action to perform: 'status' to check connections, 'create' to initiate auth, 'list' to list toolkits, 'accounts' to inspect connected accounts",
     }
   ),
   toolkit: Type.Optional(
@@ -27,6 +27,11 @@ export const ComposioManageConnectionsToolSchema = Type.Object({
       description: "User ID for session scoping (uses default if not provided)",
     })
   ),
+  statuses: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Optional connection statuses filter for 'accounts' (e.g., ['ACTIVE'])",
+    })
+  ),
 });
 
 /**
@@ -38,7 +43,8 @@ export function createComposioConnectionsTool(client: ComposioClient, _config: C
     label: "Composio Manage Connections",
     description:
       "Manage Composio toolkit connections. Use action='status' to check if a toolkit is connected, " +
-      "action='create' to generate an auth URL when disconnected, or action='list' to see available toolkits. " +
+      "action='create' to generate an auth URL when disconnected, action='list' to see available toolkits, " +
+      "or action='accounts' to inspect connected accounts across user IDs. " +
       "Check connection status before executing tools with composio_execute_tool.",
     parameters: ComposioManageConnectionsToolSchema,
 
@@ -54,6 +60,41 @@ export function createComposioConnectionsTool(client: ComposioClient, _config: C
               action: "list",
               count: toolkits.length,
               toolkits,
+            };
+            return {
+              content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
+              details: response,
+            };
+          }
+
+          case "accounts": {
+            let toolkits: string[] | undefined;
+            if (typeof params.toolkit === "string" && params.toolkit.trim()) {
+              toolkits = [params.toolkit.trim()];
+            } else if (Array.isArray(params.toolkits)) {
+              toolkits = params.toolkits.filter((t): t is string => typeof t === "string" && t.trim() !== "");
+            }
+
+            const statuses = Array.isArray(params.statuses)
+              ? params.statuses.filter((s): s is string => typeof s === "string" && s.trim() !== "")
+              : ["ACTIVE"];
+
+            const accounts = await client.listConnectedAccounts({
+              toolkits,
+              userIds: userId ? [userId] : undefined,
+              statuses,
+            });
+
+            const response = {
+              action: "accounts",
+              count: accounts.length,
+              accounts: accounts.map((a) => ({
+                id: a.id,
+                toolkit: a.toolkit,
+                user_id: a.userId,
+                status: a.status,
+                auth_config_id: a.authConfigId,
+              })),
             };
             return {
               content: [{ type: "text", text: JSON.stringify(response, null, 2) }],

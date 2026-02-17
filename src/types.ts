@@ -31,3 +31,13 @@ export interface ConnectionStatus {
   authUrl?: string;
 }
 
+export interface ConnectedAccountSummary {
+  id: string;
+  toolkit: string;
+  userId?: string;
+  status?: string;
+  authConfigId?: string;
+  isDisabled?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}

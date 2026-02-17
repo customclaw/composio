@@ -22,6 +22,7 @@ openclaw plugins install @customclaw/composio
         "enabled": true,
         "config": {
           "apiKey": "your-api-key",
+          "defaultUserId": "my-app-user-123",
           "allowedToolkits": ["gmail", "sentry"]
         }
       }
@@ -46,11 +47,12 @@ The agent handles the rest. Ask it to "check my latest emails" and it will call 
 ## CLI
 
 ```bash
-openclaw composio list                          # list available toolkits
-openclaw composio status                        # check what's connected
-openclaw composio connect gmail                 # open OAuth link
-openclaw composio disconnect gmail              # remove a connection
-openclaw composio search "send email"           # find tool slugs
+openclaw composio list --user-id user-123               # list available toolkits for a user scope
+openclaw composio status [toolkit] --user-id user-123   # check connection status in a user scope
+openclaw composio accounts [toolkit]                    # inspect connected accounts (id/user_id/status)
+openclaw composio connect gmail --user-id user-123      # open OAuth link for a specific user scope
+openclaw composio disconnect gmail --user-id user-123   # remove a connection in that user scope
+openclaw composio search "send email" --user-id user-123
 ```
 
 ## Config options
@@ -58,8 +60,21 @@ openclaw composio search "send email"           # find tool slugs
 | Key | Description |
 |-----|-------------|
 | `apiKey` | Composio API key (required) |
+| `defaultUserId` | Default Composio `user_id` scope when `--user-id` is not provided |
 | `allowedToolkits` | Only allow these toolkits (e.g. `["gmail", "sentry"]`) |
 | `blockedToolkits` | Block specific toolkits |
+
+## User ID Scope (Important)
+
+Composio connections are scoped by `user_id`. If a toolkit is connected in the dashboard
+under one user ID but OpenClaw checks another (for example `default`), status and execution
+may look disconnected.
+
+Tips:
+
+- Set `defaultUserId` in plugin config for your app's primary identity.
+- Use `--user-id` explicitly when checking status/connect/disconnect.
+- Use `openclaw composio accounts <toolkit>` to discover which `user_id` owns active connections.
 
 ## Updating
 
