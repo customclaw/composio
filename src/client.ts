@@ -255,6 +255,15 @@ export class ComposioClient {
       });
 
       if (!response.successful) {
+        const fallback = await this.tryDirectExecutionFallback({
+          uid,
+          toolSlug,
+          args,
+          connectedAccountId: accountResolution.connectedAccountId,
+          metaError: response.error,
+          metaData: response.data,
+        });
+        if (fallback) return fallback;
         return { success: false, error: response.error || "Execution failed" };
       }
 
@@ -275,6 +284,18 @@ export class ComposioClient {
 
       // Response data is nested under result.response
       const toolResponse = result.response;
+      if (!toolResponse.successful) {
+        const fallback = await this.tryDirectExecutionFallback({
+          uid,
+          toolSlug,
+          args,
+          connectedAccountId: accountResolution.connectedAccountId,
+          metaError: toolResponse.error ?? undefined,
+          metaData: response.data,
+        });
+        if (fallback) return fallback;
+      }
+
       return {
         success: toolResponse.successful,
         data: toolResponse.data,
@@ -286,6 +307,57 @@ export class ComposioClient {
         error: err instanceof Error ? err.message : String(err),
       };
     }
+  }
+
+  private async tryDirectExecutionFallback(params: {
+    uid: string;
+    toolSlug: string;
+    args: Record<string, unknown>;
+    connectedAccountId?: string;
+    metaError?: string;
+    metaData?: Record<string, unknown>;
+  }): Promise<ToolExecutionResult | null> {
+    if (!this.shouldFallbackToDirectExecution(params.uid, params.metaError, params.metaData)) {
+      return null;
+    }
+
+    try {
+      const response = await (this.client as any).tools.execute(params.toolSlug, {
+        userId: params.uid,
+        connectedAccountId: params.connectedAccountId,
+        arguments: params.args,
+        dangerouslySkipVersionCheck: true,
+      });
+
+      return {
+        success: Boolean(response?.successful),
+        data: response?.data,
+        error: response?.error ?? undefined,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  private shouldFallbackToDirectExecution(
+    uid: string,
+    metaError?: string,
+    metaData?: Record<string, unknown>
+  ): boolean {
+    if (uid === "default") return false;
+    const base = String(metaError || "");
+    const nested = this.extractNestedMetaError(metaData);
+    const combined = `${base}\n${nested}`.toLowerCase();
+    return combined.includes("no connected account found for entity id default");
+  }
+
+  private extractNestedMetaError(metaData?: Record<string, unknown>): string {
+    const results = (metaData?.results as Array<{ error?: string }> | undefined) || [];
+    const first = results[0];
+    return String(first?.error || "");
   }
 
   private async resolveConnectedAccountForExecution(params: {
@@ -546,7 +618,7 @@ export class ComposioClient {
         ...(options?.toolkits && options.toolkits.length > 0 ? { toolkit_slugs: options.toolkits } : {}),
         ...(options?.userIds && options.userIds.length > 0 ? { user_ids: options.userIds } : {}),
         ...(options?.statuses && options.statuses.length > 0 ? { statuses: options.statuses } : {}),
-        page_size: 100,
+        limit: 100,
         ...(cursor ? { cursor } : {}),
       });
 

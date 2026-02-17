@@ -34,6 +34,12 @@ vi.mock("@composio/core", () => ({
         list: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
       },
     },
+    tools: {
+      execute: vi.fn().mockResolvedValue({
+        successful: true,
+        data: { direct: true },
+      }),
+    },
     connectedAccounts: {
       list: vi.fn().mockResolvedValue({ items: [] }),
       get: vi.fn().mockResolvedValue({ toolkit: { slug: "gmail" }, status: "ACTIVE" }),
@@ -77,6 +83,21 @@ describe("config parsing", () => {
   it("defaults enabled to true", () => {
     const config = parseComposioConfig({});
     expect(config.enabled).toBe(true);
+  });
+
+  it("reads defaultUserId and toolkit filters from nested config object", () => {
+    const config = parseComposioConfig({
+      config: {
+        apiKey: "from-config",
+        defaultUserId: "app-user-123",
+        allowedToolkits: ["gmail", "sentry"],
+        blockedToolkits: ["github"],
+      },
+    });
+
+    expect(config.defaultUserId).toBe("app-user-123");
+    expect(config.allowedToolkits).toEqual(["gmail", "sentry"]);
+    expect(config.blockedToolkits).toEqual(["github"]);
   });
 });
 
@@ -206,6 +227,46 @@ describe("execute tool", () => {
     expect(result.error).toContain("ca_1");
     expect(result.error).toContain("ca_2");
   });
+
+  it("falls back to direct execute when meta-tool resolves entity as default for non-default user", async () => {
+    const client = makeClient();
+    const instance = await getLatestComposioInstance();
+
+    instance.client.connectedAccounts.list.mockResolvedValueOnce({
+      items: [
+        { id: "ca_sentry", user_id: "pg-user", status: "ACTIVE", toolkit: { slug: "sentry" } },
+      ],
+      next_cursor: null,
+    });
+
+    instance.client.tools.execute.mockResolvedValueOnce({
+      successful: false,
+      error: "1 out of 1 tools failed",
+      data: {
+        results: [{ error: "Error: No connected account found for entity ID default for toolkit sentry" }],
+      },
+    });
+
+    instance.tools.execute.mockResolvedValueOnce({
+      successful: true,
+      data: { ok: true },
+    });
+
+    const result = await client.executeTool(
+      "SENTRY_GET_ORGANIZATION_DETAILS",
+      {},
+      "pg-user"
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({ ok: true });
+    expect(instance.tools.execute).toHaveBeenCalledWith("SENTRY_GET_ORGANIZATION_DETAILS", {
+      userId: "pg-user",
+      connectedAccountId: "ca_sentry",
+      arguments: {},
+      dangerouslySkipVersionCheck: true,
+    });
+  });
 });
 
 describe("create connection", () => {
@@ -243,6 +304,11 @@ describe("connected accounts discovery", () => {
     });
 
     const accounts = await client.listConnectedAccounts({ toolkits: ["sentry"], statuses: ["ACTIVE"] });
+    expect(instance.client.connectedAccounts.list).toHaveBeenCalledWith({
+      toolkit_slugs: ["sentry"],
+      statuses: ["ACTIVE"],
+      limit: 100,
+    });
     expect(accounts).toEqual([
       {
         id: "ca_1",

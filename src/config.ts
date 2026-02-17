@@ -21,8 +21,23 @@ export function parseComposioConfig(value: unknown): ComposioConfig {
       ? (value as Record<string, unknown>)
       : {};
 
-  // Allow API key from config.apiKey, top-level apiKey, or environment
+  // Support both plugin entry shape ({ enabled, config: {...} }) and flat shape.
   const configObj = raw.config as Record<string, unknown> | undefined;
+  const enabled =
+    (typeof raw.enabled === "boolean" ? raw.enabled : undefined) ??
+    (typeof configObj?.enabled === "boolean" ? configObj.enabled : undefined) ??
+    true;
+  const defaultUserId =
+    (typeof raw.defaultUserId === "string" ? raw.defaultUserId : undefined) ??
+    (typeof configObj?.defaultUserId === "string" ? configObj.defaultUserId : undefined);
+  const allowedToolkits =
+    (Array.isArray(raw.allowedToolkits) ? raw.allowedToolkits : undefined) ??
+    (Array.isArray(configObj?.allowedToolkits) ? configObj.allowedToolkits : undefined);
+  const blockedToolkits =
+    (Array.isArray(raw.blockedToolkits) ? raw.blockedToolkits : undefined) ??
+    (Array.isArray(configObj?.blockedToolkits) ? configObj.blockedToolkits : undefined);
+
+  // Allow API key from config.apiKey, top-level apiKey, or environment.
   const apiKey =
     (typeof configObj?.apiKey === "string" && configObj.apiKey.trim()) ||
     (typeof raw.apiKey === "string" && raw.apiKey.trim()) ||
@@ -30,8 +45,11 @@ export function parseComposioConfig(value: unknown): ComposioConfig {
     "";
 
   return ComposioConfigSchema.parse({
-    ...raw,
+    enabled,
     apiKey,
+    defaultUserId,
+    allowedToolkits,
+    blockedToolkits,
   });
 }
 
