@@ -12,7 +12,13 @@ openclaw plugins install @customclaw/composio
 
 1. Get an API key from [platform.composio.dev/settings](https://platform.composio.dev/settings)
 
-2. Add to `~/.openclaw/openclaw.json`:
+2. Run the guided setup:
+
+```bash
+openclaw composio setup
+```
+
+Or add manually to `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -31,14 +37,24 @@ openclaw plugins install @customclaw/composio
 }
 ```
 
-Or set `COMPOSIO_API_KEY` as an environment variable.
+You can also set `COMPOSIO_API_KEY` as an environment variable.
 
 3. Restart the gateway.
 
+If you upgraded from an older config shape where keys like `defaultUserId` or `allowedToolkits`
+were placed directly under `plugins.entries.composio`, rerun:
+
+```bash
+openclaw composio setup
+```
+
+Legacy mixed entry-level config keys are now rejected at runtime.
+
 ## What it does
 
-The plugin gives your agent two tools:
+The plugin gives your agent three tools:
 
+- `composio_search_tools` — discovers relevant Composio actions from natural-language intent
 - `composio_execute_tool` — runs a Composio action (e.g. `GMAIL_FETCH_EMAILS`, `SENTRY_LIST_ISSUES`)
 - `composio_manage_connections` — checks connection status and generates OAuth links when a toolkit isn't connected yet
 
@@ -49,6 +65,7 @@ The agent handles the rest. Ask it to "check my latest emails" and it will call 
 ## CLI
 
 ```bash
+openclaw composio setup                                 # interactive setup for ~/.openclaw/openclaw.json
 openclaw composio list --user-id user-123               # list available toolkits for a user scope
 openclaw composio status [toolkit] --user-id user-123   # check connection status in a user scope
 openclaw composio accounts [toolkit]                    # inspect connected accounts (id/user_id/status)
@@ -65,6 +82,10 @@ openclaw composio search "send email" --user-id user-123
 | `defaultUserId` | Default Composio `user_id` scope when `--user-id` is not provided |
 | `allowedToolkits` | Only allow these toolkits (e.g. `["gmail", "sentry"]`) |
 | `blockedToolkits` | Block specific toolkits |
+| `readOnlyMode` | Blocks likely-destructive actions by token matching (delete/update/create/send/etc.); use `allowedToolSlugs` to override safe exceptions |
+| `sessionTags` | Optional Tool Router tags (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) |
+| `allowedToolSlugs` | Optional explicit allowlist of UPPERCASE tool slugs |
+| `blockedToolSlugs` | Explicit denylist of UPPERCASE tool slugs |
 
 ## User ID Scope (Important)
 
@@ -94,6 +115,24 @@ npm install
 npm run build
 npm test
 ```
+
+### Live Integration Tests (Optional)
+
+```bash
+COMPOSIO_LIVE_TEST=1 \
+COMPOSIO_API_KEY=your_key \
+npm run test:live
+```
+
+Optional env vars for execution/disconnect paths:
+
+- `COMPOSIO_LIVE_USER_ID`
+- `COMPOSIO_LIVE_TOOLKIT` (default: `gmail`)
+- `COMPOSIO_LIVE_TOOL_SLUG`
+- `COMPOSIO_LIVE_TOOL_ARGS` (JSON)
+- `COMPOSIO_LIVE_CONNECTED_ACCOUNT_ID`
+- `COMPOSIO_LIVE_EXPECT_EXECUTE_SUCCESS=1`
+- `COMPOSIO_LIVE_ALLOW_DISCONNECT=1` (destructive, opt-in)
 
 ## Acknowledgments
 

@@ -1,41 +1,67 @@
 import { Composio } from "@composio/core";
+import type { ToolRouterCreateSessionConfig } from "@composio/core";
 import type {
   ComposioConfig,
+  ComposioSessionTag,
   ToolSearchResult,
   ToolExecutionResult,
   ConnectionStatus,
   ConnectedAccountSummary,
 } from "./types.js";
+import {
+  normalizeSessionTags,
+  normalizeToolkitList,
+  normalizeToolkitSlug,
+  normalizeToolSlug,
+  normalizeToolSlugList,
+} from "./utils.js";
 
-/**
- * Tool Router session type from SDK
- */
-interface ToolRouterSession {
-  sessionId: string;
-  tools: () => Promise<unknown[]>;
-  authorize: (toolkit: string) => Promise<{ url: string }>;
-  toolkits: (options?: {
-    nextCursor?: string;
-    toolkits?: string[];
-    limit?: number;
-    isConnected?: boolean;
-    search?: string;
-  }) => Promise<{
-    items: Array<{
-      slug: string;
-      name: string;
-      connection?: {
-        isActive: boolean;
-        connectedAccount?: { id: string; status: string };
-      };
-    }>;
-    nextCursor?: string;
-    totalPages?: number;
-  }>;
-  experimental: { assistivePrompt: string };
-}
-
+type ToolRouterSession = Awaited<ReturnType<Composio["create"]>>;
 type SessionConnectedAccountsOverride = Record<string, string>;
+type ConnectedAccountStatusFilter =
+  | "INITIALIZING"
+  | "INITIATED"
+  | "ACTIVE"
+  | "FAILED"
+  | "EXPIRED"
+  | "INACTIVE";
+
+// Heuristic only: token matching may block some benign tools.
+// Use `allowedToolSlugs` to explicitly override specific slugs.
+const DESTRUCTIVE_TOOL_VERBS = new Set([
+  "CREATE",
+  "DELETE",
+  "DESTROY",
+  "DISABLE",
+  "DISCONNECT",
+  "ERASE",
+  "MODIFY",
+  "PATCH",
+  "POST",
+  "PUT",
+  "REMOVE",
+  "RENAME",
+  "REPLACE",
+  "REVOKE",
+  "SEND",
+  "SET",
+  "TRUNCATE",
+  "UNSUBSCRIBE",
+  "UPDATE",
+  "UPSERT",
+  "WRITE",
+]);
+
+function isConnectedAccountStatusFilter(value: string): value is ConnectedAccountStatusFilter {
+  return [
+    "INITIALIZING",
+    "INITIATED",
+    "ACTIVE",
+    "FAILED",
+    "EXPIRED",
+    "INACTIVE",
+  ].includes(value);
+}
 
 /**
  * Composio client wrapper using Tool Router pattern
@@ -51,7 +77,15 @@ export class ComposioClient {
         "Composio API key required. Set COMPOSIO_API_KEY env var or plugins.composio.apiKey in config."
       );
     }
-    this.config = config;
+    this.config = {
+      ...config,
+      allowedToolkits: normalizeToolkitList(config.allowedToolkits),
+      blockedToolkits: normalizeToolkitList(config.blockedToolkits),
+      sessionTags: normalizeSessionTags(config.sessionTags),
+      allowedToolSlugs: normalizeToolSlugList(config.allowedToolSlugs),
+      blockedToolSlugs: normalizeToolSlugList(config.blockedToolSlugs),
+      readOnlyMode: Boolean(config.readOnlyMode),
+    };
     this.client = new Composio({ apiKey: config.apiKey });
   }
 
@@ -70,26 +104,119 @@ export class ComposioClient {
       return `uid:${userId}`;
     }
     const normalized = Object.entries(connectedAccounts)
-      .map(([toolkit, accountId]) => `${toolkit.toLowerCase()}=${accountId}`)
+      .map(([toolkit, accountId]) => `${normalizeToolkitSlug(toolkit)}=${accountId}`)
       .sort()
       .join(",");
     return `uid:${userId}::ca:${normalized}`;
+  }
+
+  private normalizeConnectedAccountsOverride(
+    connectedAccounts?: SessionConnectedAccountsOverride
+  ): SessionConnectedAccountsOverride | undefined {
+    if (!connectedAccounts) return undefined;
+    const normalized = Object.entries(connectedAccounts)
+      .map(([toolkit, accountId]) => [normalizeToolkitSlug(toolkit), String(accountId || "").trim()] as const)
+      .filter(([toolkit, accountId]) => toolkit.length > 0 && accountId.length > 0);
+    if (normalized.length === 0) return undefined;
+    return Object.fromEntries(normalized);
+  }
+
+  private buildToolRouterBlockedToolsConfig():
+    | NonNullable<ToolRouterCreateSessionConfig["tools"]>
+    | undefined {
+    const blocked = this.config.blockedToolSlugs;
+    if (!blocked || blocked.length === 0) return undefined;
+
+    const byToolkit = new Map<string, Set<string>>();
+    for (const slug of blocked) {
+      const normalizedSlug = normalizeToolSlug(slug);
+      const toolkit = normalizeToolkitSlug(normalizedSlug.split("_")[0] || "");
+      if (!toolkit) continue;
+      if (!this.isToolkitAllowed(toolkit)) continue;
+      if (!byToolkit.has(toolkit)) byToolkit.set(toolkit, new Set());
+      byToolkit.get(toolkit)!.add(normalizedSlug);
+    }
+
+    if (byToolkit.size === 0) return undefined;
+    const tools: Record<string, { disable: string[] }> = {};
+    for (const [toolkit, slugs] of byToolkit.entries()) {
+      tools[toolkit] = { disable: Array.from(slugs) };
+    }
+    return tools as NonNullable<ToolRouterCreateSessionConfig["tools"]>;
+  }
+
+  private buildSessionConfig(
+    connectedAccounts?: SessionConnectedAccountsOverride
+  ): ToolRouterCreateSessionConfig | undefined {
+    const sessionConfig: ToolRouterCreateSessionConfig = {};
+
+    const normalizedConnectedAccounts = this.normalizeConnectedAccountsOverride(connectedAccounts);
+    if (normalizedConnectedAccounts) {
+      sessionConfig.connectedAccounts = normalizedConnectedAccounts;
+    }
+
+    if (this.config.allowedToolkits && this.config.allowedToolkits.length > 0) {
+      sessionConfig.toolkits = { enable: this.config.allowedToolkits };
+    } else if (this.config.blockedToolkits && this.config.blockedToolkits.length > 0) {
+      sessionConfig.toolkits = { disable: this.config.blockedToolkits };
+    }
+
+    const tags = new Set<ComposioSessionTag>(this.config.sessionTags || []);
+    if (this.config.readOnlyMode) tags.add("readOnlyHint");
+    if (tags.size > 0) {
+      sessionConfig.tags = Array.from(tags) as NonNullable<ToolRouterCreateSessionConfig["tags"]>;
+    }
+
+    const blockedToolsConfig = this.buildToolRouterBlockedToolsConfig();
+    if (blockedToolsConfig) {
+      sessionConfig.tools = blockedToolsConfig;
+    }
+
+    return Object.keys(sessionConfig).length > 0 ? sessionConfig : undefined;
   }
 
   private async getSession(
     userId: string,
     connectedAccounts?: SessionConnectedAccountsOverride
   ): Promise<ToolRouterSession> {
-    const key = this.makeSessionCacheKey(userId, connectedAccounts);
+    const normalizedConnectedAccounts = this.normalizeConnectedAccountsOverride(connectedAccounts);
+    const key = this.makeSessionCacheKey(userId, normalizedConnectedAccounts);
     if (this.sessionCache.has(key)) {
       return this.sessionCache.get(key)!;
     }
-    const session = await (this.client as any).toolRouter.create(
-      userId,
-      connectedAccounts ? { connectedAccounts } : undefined
-    ) as ToolRouterSession;
+    const sessionConfig = this.buildSessionConfig(normalizedConnectedAccounts);
+    let session: ToolRouterSession;
+    try {
+      session = await this.client.toolRouter.create(userId, sessionConfig);
+    } catch (err) {
+      if (!this.shouldRetrySessionWithoutToolkitFilters(err, sessionConfig)) {
+        throw err;
+      }
+
+      const { toolkits: _removedToolkits, ...retryWithoutToolkits } = sessionConfig ?? {};
+      const retryConfig = Object.keys(retryWithoutToolkits).length > 0
+        ? (retryWithoutToolkits as ToolRouterCreateSessionConfig)
+        : undefined;
+      session = await this.client.toolRouter.create(userId, retryConfig);
+    }
+
     this.sessionCache.set(key, session);
     return session;
+  }
+
+  private shouldRetrySessionWithoutToolkitFilters(
+    err: unknown,
+    sessionConfig?: ToolRouterCreateSessionConfig
+  ): boolean {
+    const enabledToolkits = (sessionConfig?.toolkits as { enable?: unknown } | undefined)?.enable;
+    if (!Array.isArray(enabledToolkits) || enabledToolkits.length === 0) {
+      return false;
+    }
+    const message = String(err instanceof Error ? err.message : err || "").toLowerCase();
+    return (
+      message.includes("require auth configs but none exist") &&
+      message.includes("please specify them in auth_configs")
+    );
   }
 
   private clearUserSessionCache(userId: string) {
@@ -104,30 +231,70 @@ export class ComposioClient {
    * Check if a toolkit is allowed based on config
    */
   private isToolkitAllowed(toolkit: string): boolean {
+    const normalizedToolkit = normalizeToolkitSlug(toolkit);
+    if (!normalizedToolkit) return false;
     const { allowedToolkits, blockedToolkits } = this.config;
 
-    if (blockedToolkits?.includes(toolkit.toLowerCase())) {
+    if (blockedToolkits?.includes(normalizedToolkit)) {
       return false;
     }
 
     if (allowedToolkits && allowedToolkits.length > 0) {
-      return allowedToolkits.includes(toolkit.toLowerCase());
+      return allowedToolkits.includes(normalizedToolkit);
     }
 
     return true;
+  }
+
+  private isLikelyDestructiveToolSlug(toolSlug: string): boolean {
+    const tokens = normalizeToolSlug(toolSlug)
+      .split("_")
+      .filter(Boolean);
+    return tokens.some((token) => DESTRUCTIVE_TOOL_VERBS.has(token));
+  }
+
+  private getToolSlugRestrictionError(toolSlug: string): string | undefined {
+    const normalizedToolSlug = normalizeToolSlug(toolSlug);
+    if (!normalizedToolSlug) return "tool_slug is required";
+    const isExplicitlyAllowed = this.config.allowedToolSlugs?.includes(normalizedToolSlug) ?? false;
+
+    if (this.config.allowedToolSlugs && this.config.allowedToolSlugs.length > 0) {
+      if (!isExplicitlyAllowed) {
+        return `Tool '${normalizedToolSlug}' is not in allowedToolSlugs`;
+      }
+    }
+
+    if (this.config.blockedToolSlugs?.includes(normalizedToolSlug)) {
+      return `Tool '${normalizedToolSlug}' is blocked by plugin configuration`;
+    }
+
+    if (this.config.readOnlyMode && !isExplicitlyAllowed && this.isLikelyDestructiveToolSlug(normalizedToolSlug)) {
+      return (
+        `Tool '${normalizedToolSlug}' was blocked by readOnlyMode because it appears to modify data. ` +
+        "Disable readOnlyMode or add this slug to allowedToolSlugs if execution is intentional."
+      );
+    }
+
+    return undefined;
   }
 
   /**
    * Execute a Tool Router meta-tool
    */
   private async executeMetaTool(
+    sessionId: string,
     toolName: string,
     args: Record<string, unknown>
   ): Promise<{ data?: Record<string, unknown>; successful: boolean; error?: string }> {
-    const response = await (this.client as any).client.tools.execute(toolName, {
+    const response = await this.client.tools.executeMetaTool(toolName, {
+      sessionId,
       arguments: args,
-    } as Record<string, unknown>);
-    return response as { data?: Record<string, unknown>; successful: boolean; error?: string };
+    });
+    return {
+      successful: Boolean(response.successful),
+      data: response.data as Record<string, unknown> | undefined,
+      error: response.error ?? undefined,
+    };
   }
 
   /**
@@ -143,11 +310,11 @@ export class ComposioClient {
   ): Promise<ToolSearchResult[]> {
     const userId = this.getUserId(options?.userId);
     const session = await this.getSession(userId);
+    const requestedToolkits = normalizeToolkitList(options?.toolkits);
 
     try {
-      const response = await this.executeMetaTool("COMPOSIO_SEARCH_TOOLS", {
+      const response = await this.executeMetaTool(session.sessionId, "COMPOSIO_SEARCH_TOOLS", {
         queries: [{ use_case: query }],
-        session: { id: session.sessionId },
       });
 
       if (!response.successful || !response.data) {
@@ -180,12 +347,12 @@ export class ComposioClient {
           seenSlugs.add(slug);
 
           const schema = toolSchemas[slug];
-          const toolkit = schema?.toolkit || slug.split("_")[0] || "";
+          const toolkit = normalizeToolkitSlug(schema?.toolkit || slug.split("_")[0] || "");
 
           if (!this.isToolkitAllowed(toolkit)) continue;
 
-          if (options?.toolkits && options.toolkits.length > 0) {
-            if (!options.toolkits.some(t => t.toLowerCase() === toolkit.toLowerCase())) {
+          if (requestedToolkits && requestedToolkits.length > 0) {
+            if (!requestedToolkits.includes(toolkit)) {
               continue;
             }
           }
@@ -222,8 +389,13 @@ export class ComposioClient {
     connectedAccountId?: string
   ): Promise<ToolExecutionResult> {
     const uid = this.getUserId(userId);
+    const normalizedToolSlug = normalizeToolSlug(toolSlug);
+    const toolRestrictionError = this.getToolSlugRestrictionError(normalizedToolSlug);
+    if (toolRestrictionError) {
+      return { success: false, error: toolRestrictionError };
+    }
 
-    const toolkit = toolSlug.split("_")[0]?.toLowerCase() || "";
+    const toolkit = normalizeToolkitSlug(normalizedToolSlug.split("_")[0] || "");
     if (!this.isToolkitAllowed(toolkit)) {
       return {
         success: false,
@@ -248,16 +420,15 @@ export class ComposioClient {
     );
 
     try {
-      const response = await this.executeMetaTool("COMPOSIO_MULTI_EXECUTE_TOOL", {
-        tools: [{ tool_slug: toolSlug, arguments: args }],
-        session: { id: session.sessionId },
+      const response = await this.executeMetaTool(session.sessionId, "COMPOSIO_MULTI_EXECUTE_TOOL", {
+        tools: [{ tool_slug: normalizedToolSlug, arguments: args }],
         sync_response_to_workbench: false,
       });
 
       if (!response.successful) {
         const recovered = await this.tryExecutionRecovery({
           uid,
-          toolSlug,
+          toolSlug: normalizedToolSlug,
           args,
           connectedAccountId: accountResolution.connectedAccountId,
           metaError: response.error,
@@ -287,7 +458,7 @@ export class ComposioClient {
       if (!toolResponse.successful) {
         const recovered = await this.tryExecutionRecovery({
           uid,
-          toolSlug,
+          toolSlug: normalizedToolSlug,
           args,
           connectedAccountId: accountResolution.connectedAccountId,
           metaError: toolResponse.error ?? undefined,
@@ -356,7 +527,7 @@ export class ComposioClient {
     connectedAccountId?: string
   ): Promise<ToolExecutionResult> {
     try {
-      const response = await (this.client as any).tools.execute(toolSlug, {
+      const response = await this.client.tools.execute(toolSlug, {
         userId,
         connectedAccountId,
         arguments: args,
@@ -489,16 +660,17 @@ export class ComposioClient {
     userId: string;
     connectedAccountId?: string;
   }): Promise<{ connectedAccountId?: string } | { error: string }> {
-    const { toolkit, userId } = params;
+    const toolkit = normalizeToolkitSlug(params.toolkit);
+    const { userId } = params;
     const explicitId = params.connectedAccountId?.trim();
 
     if (explicitId) {
       try {
-        const account = await (this.client as any).connectedAccounts.get(explicitId) as {
+        const account = await this.client.connectedAccounts.get(explicitId) as {
           status?: string;
           toolkit?: { slug?: string };
         };
-        const accountToolkit = String(account?.toolkit?.slug || "").toLowerCase();
+        const accountToolkit = normalizeToolkitSlug(String(account?.toolkit?.slug || ""));
         const accountStatus = String(account?.status || "").toUpperCase();
 
         if (accountToolkit && accountToolkit !== toolkit) {
@@ -548,14 +720,15 @@ export class ComposioClient {
     const session = await this.getSession(uid);
 
     try {
-      if (toolkits && toolkits.length > 0) {
-        const requestedToolkits = toolkits.filter(t => this.isToolkitAllowed(t));
+      const normalizedToolkits = normalizeToolkitList(toolkits);
+      if (normalizedToolkits && normalizedToolkits.length > 0) {
+        const requestedToolkits = normalizedToolkits.filter((t) => this.isToolkitAllowed(t));
         if (requestedToolkits.length === 0) return [];
         const toolkitStateMap = await this.getToolkitStateMap(session, requestedToolkits);
         const activeAccountToolkits = await this.getActiveConnectedAccountToolkits(uid, requestedToolkits);
 
         return requestedToolkits.map((toolkit) => {
-          const key = toolkit.toLowerCase();
+          const key = normalizeToolkitSlug(toolkit);
           return {
             toolkit,
             connected: (toolkitStateMap.get(key) ?? false) || activeAccountToolkits.has(key),
@@ -607,7 +780,7 @@ export class ComposioClient {
 
       const items = response.items || [];
       for (const tk of items) {
-        const key = tk.slug.toLowerCase();
+        const key = normalizeToolkitSlug(tk.slug);
         const isActive = tk.connection?.isActive ?? false;
         map.set(key, (map.get(key) ?? false) || isActive);
       }
@@ -626,15 +799,16 @@ export class ComposioClient {
     toolkits?: string[]
   ): Promise<Set<string>> {
     const connected = new Set<string>();
+    const normalizedToolkits = normalizeToolkitList(toolkits);
     let cursor: string | null | undefined;
     const seenCursors = new Set<string>();
 
     try {
       do {
-        const response = await (this.client as any).connectedAccounts.list({
+        const response = await this.client.connectedAccounts.list({
           userIds: [userId],
           statuses: ["ACTIVE"],
-          ...(toolkits && toolkits.length > 0 ? { toolkitSlugs: toolkits } : {}),
+          ...(normalizedToolkits && normalizedToolkits.length > 0 ? { toolkitSlugs: normalizedToolkits } : {}),
           limit: 100,
           ...(cursor ? { cursor } : {}),
         });
@@ -646,10 +820,10 @@ export class ComposioClient {
         ) as Array<{ toolkit?: { slug?: string }; status?: string }>;
 
         for (const item of items) {
-          const slug = item.toolkit?.slug;
+          const slug = normalizeToolkitSlug(item.toolkit?.slug || "");
           if (!slug) continue;
           if (item.status && String(item.status).toUpperCase() !== "ACTIVE") continue;
-          connected.add(slug.toLowerCase());
+          connected.add(slug);
         }
 
         cursor = Array.isArray(response)
@@ -667,12 +841,11 @@ export class ComposioClient {
     }
   }
 
-  private normalizeStatuses(statuses?: string[]): string[] | undefined {
+  private normalizeStatuses(statuses?: string[]): ConnectedAccountStatusFilter[] | undefined {
     if (!statuses || statuses.length === 0) return undefined;
-    const allowed = new Set(["INITIALIZING", "INITIATED", "ACTIVE", "FAILED", "EXPIRED", "INACTIVE"]);
     const normalized = statuses
       .map(s => String(s || "").trim().toUpperCase())
-      .filter(s => allowed.has(s));
+      .filter(isConnectedAccountStatusFilter);
     return normalized.length > 0 ? Array.from(new Set(normalized)) : undefined;
   }
 
@@ -685,9 +858,7 @@ export class ComposioClient {
     userIds?: string[];
     statuses?: string[];
   }): Promise<ConnectedAccountSummary[]> {
-    const toolkits = options?.toolkits
-      ?.map(t => String(t || "").trim())
-      .filter(t => t.length > 0 && this.isToolkitAllowed(t));
+    const toolkits = normalizeToolkitList(options?.toolkits)?.filter((t) => this.isToolkitAllowed(t));
     const userIds = options?.userIds
       ?.map(u => String(u || "").trim())
       .filter(Boolean);
@@ -714,10 +885,11 @@ export class ComposioClient {
    * Find user IDs that have an active connected account for a toolkit.
    */
   async findActiveUserIdsForToolkit(toolkit: string): Promise<string[]> {
-    if (!this.isToolkitAllowed(toolkit)) return [];
+    const normalizedToolkit = normalizeToolkitSlug(toolkit);
+    if (!this.isToolkitAllowed(normalizedToolkit)) return [];
 
     const accounts = await this.listConnectedAccounts({
-      toolkits: [toolkit],
+      toolkits: [normalizedToolkit],
       statuses: ["ACTIVE"],
     });
 
@@ -731,7 +903,7 @@ export class ComposioClient {
   private async listConnectedAccountsRaw(options?: {
     toolkits?: string[];
     userIds?: string[];
-    statuses?: string[];
+    statuses?: ConnectedAccountStatusFilter[];
   }): Promise<ConnectedAccountSummary[]> {
     const accounts: ConnectedAccountSummary[] = [];
     let cursor: string | null | undefined;
@@ -753,8 +925,9 @@ export class ComposioClient {
       ) as Array<Record<string, unknown>>;
 
       for (const item of items) {
-        const toolkitSlug =
-          ((item.toolkit as { slug?: string } | undefined)?.slug || "").toString().toLowerCase();
+        const toolkitSlug = normalizeToolkitSlug(
+          ((item.toolkit as { slug?: string } | undefined)?.slug || "").toString()
+        );
         if (!toolkitSlug) continue;
         if (!this.isToolkitAllowed(toolkitSlug)) continue;
 
@@ -786,14 +959,14 @@ export class ComposioClient {
   private async listConnectedAccountsFallback(options?: {
     toolkits?: string[];
     userIds?: string[];
-    statuses?: string[];
+    statuses?: ConnectedAccountStatusFilter[];
   }): Promise<ConnectedAccountSummary[]> {
     const accounts: ConnectedAccountSummary[] = [];
     let cursor: string | null | undefined;
     const seenCursors = new Set<string>();
 
     do {
-      const response = await (this.client as any).connectedAccounts.list({
+      const response = await this.client.connectedAccounts.list({
         ...(options?.toolkits && options.toolkits.length > 0 ? { toolkitSlugs: options.toolkits } : {}),
         ...(options?.userIds && options.userIds.length > 0 ? { userIds: options.userIds } : {}),
         ...(options?.statuses && options.statuses.length > 0 ? { statuses: options.statuses } : {}),
@@ -808,8 +981,9 @@ export class ComposioClient {
       ) as Array<Record<string, unknown>>;
 
       for (const item of items) {
-        const toolkitSlug =
-          ((item.toolkit as { slug?: string } | undefined)?.slug || "").toString().toLowerCase();
+        const toolkitSlug = normalizeToolkitSlug(
+          ((item.toolkit as { slug?: string } | undefined)?.slug || "").toString()
+        );
         if (!toolkitSlug) continue;
         if (!this.isToolkitAllowed(toolkitSlug)) continue;
 
@@ -845,14 +1019,19 @@ export class ComposioClient {
     userId?: string
   ): Promise<{ authUrl: string } | { error: string }> {
     const uid = this.getUserId(userId);
+    const toolkitSlug = normalizeToolkitSlug(toolkit);
 
-    if (!this.isToolkitAllowed(toolkit)) {
-      return { error: `Toolkit '${toolkit}' is not allowed by plugin configuration` };
+    if (!toolkitSlug) {
+      return { error: "Toolkit is required" };
+    }
+
+    if (!this.isToolkitAllowed(toolkitSlug)) {
+      return { error: `Toolkit '${toolkitSlug}' is not allowed by plugin configuration` };
     }
 
     try {
       const session = await this.getSession(uid);
-      const result = await session.authorize(toolkit) as { redirectUrl?: string; url?: string };
+      const result = await session.authorize(toolkitSlug) as { redirectUrl?: string; url?: string };
       return { authUrl: result.redirectUrl || result.url || "" };
     } catch (err) {
       return {
@@ -881,7 +1060,7 @@ export class ComposioClient {
 
         const allToolkits = response.items || [];
         for (const tk of allToolkits) {
-          const slug = tk.slug.toLowerCase();
+          const slug = normalizeToolkitSlug(tk.slug);
           if (!this.isToolkitAllowed(slug)) continue;
           seen.add(slug);
         }
@@ -913,16 +1092,28 @@ export class ComposioClient {
     userId?: string
   ): Promise<{ success: boolean; error?: string }> {
     const uid = this.getUserId(userId);
+    const toolkitSlug = normalizeToolkitSlug(toolkit);
+
+    if (!toolkitSlug) {
+      return { success: false, error: "Toolkit is required" };
+    }
+
+    if (this.config.readOnlyMode) {
+      return {
+        success: false,
+        error: "Disconnect is blocked by readOnlyMode.",
+      };
+    }
 
     try {
       const activeAccounts = await this.listConnectedAccounts({
-        toolkits: [toolkit],
+        toolkits: [toolkitSlug],
         userIds: [uid],
         statuses: ["ACTIVE"],
       });
 
       if (activeAccounts.length === 0) {
-        return { success: false, error: `No connection found for toolkit '${toolkit}'` };
+        return { success: false, error: `No connection found for toolkit '${toolkitSlug}'` };
       }
 
       if (activeAccounts.length > 1) {
@@ -930,12 +1121,12 @@ export class ComposioClient {
         return {
           success: false,
           error:
-            `Multiple ACTIVE '${toolkit}' accounts found for user_id '${uid}': ${ids}. ` +
+            `Multiple ACTIVE '${toolkitSlug}' accounts found for user_id '${uid}': ${ids}. ` +
             "Use the dashboard to disconnect a specific account.",
         };
       }
 
-      await (this.client as any).connectedAccounts.delete({ connectedAccountId: activeAccounts[0]!.id });
+      await this.client.connectedAccounts.delete(activeAccounts[0]!.id);
 
       // Clear session cache to refresh connection status
       this.clearUserSessionCache(uid);

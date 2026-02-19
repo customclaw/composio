@@ -27,6 +27,25 @@
         "type": "array",
         "items": { "type": "string" },
         "description": "Block specific toolkits"
+      },
+      "readOnlyMode": {
+        "type": "boolean",
+        "description": "Block likely destructive tool actions by default"
+      },
+      "sessionTags": {
+        "type": "array",
+        "items": { "type": "string", "enum": ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] },
+        "description": "Optional Tool Router behavior tags"
+      },
+      "allowedToolSlugs": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Optional explicit allowlist for tool slugs (UPPERCASE)"
+      },
+      "blockedToolSlugs": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Explicit denylist for tool slugs (UPPERCASE)"
       }
     }
   },
@@ -52,6 +71,26 @@
     "blockedToolkits": {
       "label": "Blocked Toolkits",
       "help": "Block specific toolkits from being used",
+      "advanced": true
+    },
+    "readOnlyMode": {
+      "label": "Read-Only Mode",
+      "help": "Block likely-destructive tool actions by default",
+      "advanced": true
+    },
+    "sessionTags": {
+      "label": "Session Tags",
+      "help": "Tool Router behavior tags (e.g., readOnlyHint, destructiveHint)",
+      "advanced": true
+    },
+    "allowedToolSlugs": {
+      "label": "Allowed Tool Slugs",
+      "help": "Optional explicit allowlist for tool slugs (UPPERCASE)",
+      "advanced": true
+    },
+    "blockedToolSlugs": {
+      "label": "Blocked Tool Slugs",
+      "help": "Explicit denylist for tool slugs (UPPERCASE)",
       "advanced": true
     }
   }

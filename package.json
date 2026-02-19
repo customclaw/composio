@@ -11,8 +11,9 @@
     ]
   },
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist && tsc",
     "test": "vitest run",
+    "test:live": "vitest run src/live.integration.test.ts",
     "prepublishOnly": "npm run build"
   },
   "files": [
