@@ -82,7 +82,7 @@ openclaw composio search "send email" --user-id user-123
 | `defaultUserId` | Default Composio `user_id` scope when `--user-id` is not provided |
 | `allowedToolkits` | Only allow these toolkits (e.g. `["gmail", "sentry"]`) |
 | `blockedToolkits` | Block specific toolkits |
-| `readOnlyMode` | Blocks likely-destructive actions (delete/update/create/send/etc.) |
+| `readOnlyMode` | Blocks likely-destructive actions by token matching (delete/update/create/send/etc.); use `allowedToolSlugs` to override safe exceptions |
 | `sessionTags` | Optional Tool Router tags (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) |
 | `allowedToolSlugs` | Optional explicit allowlist of UPPERCASE tool slugs |
 | `blockedToolSlugs` | Explicit denylist of UPPERCASE tool slugs |

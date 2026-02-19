@@ -5,6 +5,12 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import type { ComposioClient } from "./client.js";
 import type { ComposioConfig } from "./types.js";
+import {
+  isRecord,
+  normalizeToolkitList,
+  normalizeToolkitSlug,
+  stripLegacyFlatConfigKeys,
+} from "./utils.js";
 
 interface PluginLogger {
   info(msg: string): void;
@@ -21,44 +27,18 @@ interface RegisterCliOptions {
 
 const DEFAULT_OPENCLAW_CONFIG_PATH = path.join(os.homedir(), ".openclaw", "openclaw.json");
 const COMPOSIO_PLUGIN_ID = "composio";
-const LEGACY_FLAT_CONFIG_KEYS = [
-  "apiKey",
-  "defaultUserId",
-  "allowedToolkits",
-  "blockedToolkits",
-  "readOnlyMode",
-  "sessionTags",
-  "allowedToolSlugs",
-  "blockedToolSlugs",
-] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeToolkit(value: string): string {
-  return String(value || "").trim().toLowerCase();
-}
-
-function normalizeToolkitList(values: string[]): string[] {
-  const normalized = values
-    .map((value) => normalizeToolkit(value))
-    .filter(Boolean);
-  return Array.from(new Set(normalized));
-}
 
 function parseCsvToolkits(value?: string): string[] | undefined {
   if (!value) return undefined;
-  const parsed = normalizeToolkitList(value.split(","));
-  return parsed.length > 0 ? parsed : undefined;
+  return normalizeToolkitList(value.split(","));
 }
 
-function parseBooleanLike(value: string, fallback: boolean): boolean {
+function parseBooleanLike(value: string): boolean | undefined {
   const raw = value.trim().toLowerCase();
-  if (!raw) return fallback;
+  if (!raw) return undefined;
   if (["1", "true", "yes", "y"].includes(raw)) return true;
   if (["0", "false", "no", "n"].includes(raw)) return false;
-  return fallback;
+  return undefined;
 }
 
 function normalizePluginIdList(value: unknown): string[] | undefined {
@@ -68,14 +48,6 @@ function normalizePluginIdList(value: unknown): string[] | undefined {
     .map((item) => item.trim())
     .filter(Boolean);
   return Array.from(new Set(normalized));
-}
-
-function stripLegacyFlatConfigKeys(entry: Record<string, unknown>): Record<string, unknown> {
-  const sanitized = { ...entry };
-  for (const key of LEGACY_FLAT_CONFIG_KEYS) {
-    delete sanitized[key];
-  }
-  return sanitized;
 }
 
 async function readOpenClawConfig(configPath: string): Promise<Record<string, unknown>> {
@@ -190,21 +162,27 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
         let allowedToolkits =
           parseCsvToolkits(options.allowedToolkits) ||
           (Array.isArray(existingComposioConfig.allowedToolkits)
-            ? normalizeToolkitList(existingComposioConfig.allowedToolkits as string[])
-            : normalizeToolkitList(config.allowedToolkits || []));
+            ? normalizeToolkitList(existingComposioConfig.allowedToolkits)
+            : normalizeToolkitList(config.allowedToolkits));
 
         let blockedToolkits =
           parseCsvToolkits(options.blockedToolkits) ||
           (Array.isArray(existingComposioConfig.blockedToolkits)
-            ? normalizeToolkitList(existingComposioConfig.blockedToolkits as string[])
-            : normalizeToolkitList(config.blockedToolkits || []));
+            ? normalizeToolkitList(existingComposioConfig.blockedToolkits)
+            : normalizeToolkitList(config.blockedToolkits));
 
         let readOnlyMode =
-          options.readOnly !== undefined
-            ? parseBooleanLike(options.readOnly, false)
-            : (typeof existingComposioConfig.readOnlyMode === "boolean"
-              ? existingComposioConfig.readOnlyMode
-              : Boolean(config.readOnlyMode));
+          typeof existingComposioConfig.readOnlyMode === "boolean"
+            ? existingComposioConfig.readOnlyMode
+            : Boolean(config.readOnlyMode);
+        if (options.readOnly !== undefined) {
+          const parsedReadOnly = parseBooleanLike(options.readOnly);
+          if (parsedReadOnly === undefined) {
+            logger.error("Invalid value for --read-only. Expected one of: true/false/yes/no/1/0.");
+            return;
+          }
+          readOnlyMode = parsedReadOnly;
+        }
 
         if (!options.yes) {
           const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -238,7 +216,12 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
             const readOnlyPrompt = await rl.question(
               `Enable read-only safety mode? (y/N) [${readOnlyMode ? "Y" : "N"}]: `
             );
-            readOnlyMode = parseBooleanLike(readOnlyPrompt, readOnlyMode);
+            const parsedReadOnlyPrompt = parseBooleanLike(readOnlyPrompt);
+            if (parsedReadOnlyPrompt !== undefined) {
+              readOnlyMode = parsedReadOnlyPrompt;
+            } else if (readOnlyPrompt.trim()) {
+              logger.warn("Invalid read-only input. Keeping existing readOnlyMode value.");
+            }
           } finally {
             rl.close();
           }
@@ -336,7 +319,7 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
       if (!composioClient) return;
 
       try {
-        const toolkitSlug = toolkit ? normalizeToolkit(toolkit) : undefined;
+        const toolkitSlug = toolkit ? normalizeToolkitSlug(toolkit) : undefined;
         const toolkits = toolkitSlug ? [toolkitSlug] : undefined;
         const statuses = await composioClient.getConnectionStatus(toolkits, options.userId);
 
@@ -387,7 +370,7 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
           .map(s => s.trim())
           .filter(Boolean);
         const accounts = await composioClient.listConnectedAccounts({
-          toolkits: toolkit ? [normalizeToolkit(toolkit)] : undefined,
+          toolkits: toolkit ? [normalizeToolkitSlug(toolkit)] : undefined,
           userIds: options.userId ? [options.userId] : undefined,
           statuses: statuses.length > 0 ? statuses : ["ACTIVE"],
         });
@@ -421,7 +404,7 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
       if (!composioClient) return;
 
       try {
-        const toolkitSlug = normalizeToolkit(toolkit);
+        const toolkitSlug = normalizeToolkitSlug(toolkit);
         const currentUserId = options.userId || config.defaultUserId || "default";
         console.log(`\nInitiating connection to ${toolkitSlug}...`);
         console.log(`Using user_id: ${currentUserId}`);
@@ -468,7 +451,7 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
       if (!composioClient) return;
 
       try {
-        const toolkitSlug = normalizeToolkit(toolkit);
+        const toolkitSlug = normalizeToolkitSlug(toolkit);
         console.log(`\nDisconnecting from ${toolkitSlug}...`);
 
         const result = await composioClient.disconnectToolkit(toolkitSlug, options.userId);
@@ -496,7 +479,7 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
 
       try {
         const limit = parseInt(options.limit, 10) || 10;
-        const toolkits = options.toolkit ? [normalizeToolkit(options.toolkit)] : undefined;
+        const toolkits = options.toolkit ? [normalizeToolkitSlug(options.toolkit)] : undefined;
 
         const results = await composioClient.searchTools(query, {
           toolkits,

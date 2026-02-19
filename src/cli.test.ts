@@ -140,6 +140,21 @@ describe("composio setup cli", () => {
     expect(logs.some((entry) => entry.message.includes("Composio API key is required"))).toBe(true);
   });
 
+  it("rejects invalid --read-only values instead of silently falling back", async () => {
+    const { setup, logs } = buildCliFixture({ enabled: true });
+    const configPath = path.join(tmpDir, "openclaw.json");
+
+    await setup.runAction({
+      configPath,
+      apiKey: "test-api-key",
+      readOnly: "banana",
+      yes: true,
+    });
+
+    expect(logs.some((entry) => entry.message.includes("Invalid value for --read-only"))).toBe(true);
+    await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("normalizes allowlist entry to exact lowercase composio id", async () => {
     const { setup } = buildCliFixture({ enabled: true });
     const configPath = path.join(tmpDir, "openclaw.json");

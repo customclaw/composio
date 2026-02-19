@@ -8,9 +8,15 @@ import type {
   ConnectionStatus,
   ConnectedAccountSummary,
 } from "./types.js";
+import {
+  normalizeSessionTags,
+  normalizeToolkitList,
+  normalizeToolkitSlug,
+  normalizeToolSlug,
+  normalizeToolSlugList,
+} from "./utils.js";
 
 type ToolRouterSession = Awaited<ReturnType<Composio["create"]>>;
-
 type SessionConnectedAccountsOverride = Record<string, string>;
 type ConnectedAccountStatusFilter =
   | "INITIALIZING"
@@ -20,13 +26,8 @@ type ConnectedAccountStatusFilter =
   | "EXPIRED"
   | "INACTIVE";
 
-const SESSION_TAGS = new Set<ComposioSessionTag>([
-  "readOnlyHint",
-  "destructiveHint",
-  "idempotentHint",
-  "openWorldHint",
-]);
-
+// Heuristic only: token matching may block some benign tools.
+// Use `allowedToolSlugs` to explicitly override specific slugs.
 const DESTRUCTIVE_TOOL_VERBS = new Set([
   "CREATE",
   "DELETE",
@@ -50,39 +51,6 @@ const DESTRUCTIVE_TOOL_VERBS = new Set([
   "UPSERT",
   "WRITE",
 ]);
-
-function normalizeToolkitSlug(value: string): string {
-  return String(value || "").trim().toLowerCase();
-}
-
-function normalizeToolSlug(value: string): string {
-  return String(value || "").trim().toUpperCase();
-}
-
-function normalizeToolkitList(values?: string[]): string[] | undefined {
-  if (!values || values.length === 0) return undefined;
-  const normalized = values
-    .map((v) => normalizeToolkitSlug(v))
-    .filter(Boolean);
-  if (normalized.length === 0) return undefined;
-  return Array.from(new Set(normalized));
-}
-
-function normalizeToolSlugList(values?: string[]): string[] | undefined {
-  if (!values || values.length === 0) return undefined;
-  const normalized = values
-    .map((v) => normalizeToolSlug(v))
-    .filter(Boolean);
-  if (normalized.length === 0) return undefined;
-  return Array.from(new Set(normalized));
-}
-
-function normalizeSessionTags(values?: ComposioSessionTag[]): ComposioSessionTag[] | undefined {
-  if (!values || values.length === 0) return undefined;
-  const normalized = values.filter((tag): tag is ComposioSessionTag => SESSION_TAGS.has(tag));
-  if (normalized.length === 0) return undefined;
-  return Array.from(new Set(normalized));
-}
 
 function isConnectedAccountStatusFilter(value: string): value is ConnectedAccountStatusFilter {
   return [
@@ -225,10 +193,10 @@ export class ComposioClient {
         throw err;
       }
 
-      const retryConfig = sessionConfig ? { ...sessionConfig } : undefined;
-      if (retryConfig) {
-        delete (retryConfig as { toolkits?: unknown }).toolkits;
-      }
+      const { toolkits: _removedToolkits, ...retryWithoutToolkits } = sessionConfig ?? {};
+      const retryConfig = Object.keys(retryWithoutToolkits).length > 0
+        ? (retryWithoutToolkits as ToolRouterCreateSessionConfig)
+        : undefined;
       session = await this.client.toolRouter.create(userId, retryConfig);
     }
 

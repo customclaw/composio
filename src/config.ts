@@ -1,51 +1,14 @@
 import { z } from "zod";
-import type { ComposioConfig, ComposioSessionTag } from "./types.js";
-
-const SESSION_TAGS = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const;
-const LEGACY_ENTRY_FLAT_CONFIG_KEYS = [
-  "apiKey",
-  "defaultUserId",
-  "allowedToolkits",
-  "blockedToolkits",
-  "readOnlyMode",
-  "sessionTags",
-  "allowedToolSlugs",
-  "blockedToolSlugs",
-] as const;
-
-function normalizeToolkitList(value?: unknown[]): string[] | undefined {
-  if (!value || value.length === 0) return undefined;
-  const normalized = value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
-  if (normalized.length === 0) return undefined;
-  return Array.from(new Set(normalized));
-}
-
-function normalizeToolSlugList(value?: unknown[]): string[] | undefined {
-  if (!value || value.length === 0) return undefined;
-  const normalized = value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim().toUpperCase())
-    .filter(Boolean);
-  if (normalized.length === 0) return undefined;
-  return Array.from(new Set(normalized));
-}
-
-function normalizeSessionTags(value?: unknown[]): ComposioSessionTag[] | undefined {
-  if (!value || value.length === 0) return undefined;
-  const normalized = value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item): item is ComposioSessionTag => SESSION_TAGS.includes(item as ComposioSessionTag));
-  if (normalized.length === 0) return undefined;
-  return Array.from(new Set(normalized));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
+import type { ComposioConfig } from "./types.js";
+import {
+  LEGACY_ENTRY_FLAT_CONFIG_KEYS,
+  LEGACY_SHAPE_ERROR,
+  SESSION_TAGS,
+  isRecord,
+  normalizeSessionTags,
+  normalizeToolkitList,
+  normalizeToolSlugList,
+} from "./utils.js";
 
 /**
  * Zod schema for Composio plugin configuration
@@ -72,7 +35,7 @@ export function parseComposioConfig(value: unknown): ComposioConfig {
   if (configObj) {
     const hasLegacyFlatKeys = LEGACY_ENTRY_FLAT_CONFIG_KEYS.some((key) => key in raw);
     if (hasLegacyFlatKeys) {
-      throw new Error("Legacy Composio config shape detected. Run 'openclaw composio setup'.");
+      throw new Error(LEGACY_SHAPE_ERROR);
     }
   }
 
@@ -130,7 +93,8 @@ export const composioConfigUiHints = {
   },
   readOnlyMode: {
     label: "Read-Only Mode",
-    help: "Block likely-destructive tool actions (delete/remove/update/write) by default",
+    help:
+      "Block likely-destructive tool actions by token matching; allow specific slugs with allowedToolSlugs if needed",
     advanced: true,
   },
   sessionTags: {

@@ -4,31 +4,7 @@ import { createComposioSearchTool } from "./tools/search.js";
 import { createComposioExecuteTool } from "./tools/execute.js";
 import { createComposioConnectionsTool } from "./tools/connections.js";
 import { registerComposioCli } from "./cli.js";
-
-const LEGACY_ENTRY_FLAT_CONFIG_KEYS = [
-  "apiKey",
-  "defaultUserId",
-  "allowedToolkits",
-  "blockedToolkits",
-  "readOnlyMode",
-  "sessionTags",
-  "allowedToolSlugs",
-  "blockedToolSlugs",
-] as const;
-const LEGACY_SHAPE_ERROR = "Legacy Composio config shape detected. Run 'openclaw composio setup'.";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasLegacyFlatEntryConfig(config: unknown): boolean {
-  const root = isRecord(config) ? config : undefined;
-  const plugins = isRecord(root?.plugins) ? root.plugins : undefined;
-  const entries = isRecord(plugins?.entries) ? plugins.entries : undefined;
-  const composioEntry = isRecord(entries?.composio) ? entries.composio : undefined;
-  if (!composioEntry) return false;
-  return LEGACY_ENTRY_FLAT_CONFIG_KEYS.some((key) => key in composioEntry);
-}
+import { LEGACY_SHAPE_ERROR, hasLegacyFlatEntryConfig } from "./utils.js";
 
 /**
  * Composio Tool Router Plugin for OpenClaw
