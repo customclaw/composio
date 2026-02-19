@@ -24,17 +24,15 @@ vi.mock("@composio/core", () => ({
       }),
     },
     client: {
-      tools: {
-        execute: vi.fn().mockResolvedValue({
-          successful: true,
-          data: { results: [{ tool_slug: "GMAIL_FETCH_EMAILS", index: 0, response: { successful: true, data: { messages: [] } } }] },
-        }),
-      },
       connectedAccounts: {
         list: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
       },
     },
     tools: {
+      executeMetaTool: vi.fn().mockResolvedValue({
+        successful: true,
+        data: { results: [{ tool_slug: "GMAIL_FETCH_EMAILS", index: 0, response: { successful: true, data: { messages: [] } } }] },
+      }),
       execute: vi.fn().mockResolvedValue({
         successful: true,
         data: { direct: true },
@@ -99,6 +97,40 @@ describe("config parsing", () => {
     expect(config.allowedToolkits).toEqual(["gmail", "sentry"]);
     expect(config.blockedToolkits).toEqual(["github"]);
   });
+
+  it("normalizes toolkit/tool casing and reads safety options", () => {
+    const config = parseComposioConfig({
+      config: {
+        apiKey: "from-config",
+        allowedToolkits: ["GMail", "  Sentry "],
+        blockedToolkits: ["GitHub"],
+        allowedToolSlugs: ["gmail_fetch_emails", " SENTRY_GET_ISSUES "],
+        blockedToolSlugs: ["gmail_delete_email"],
+        sessionTags: ["readOnlyHint", "destructiveHint"],
+        readOnlyMode: true,
+      },
+    });
+
+    expect(config.allowedToolkits).toEqual(["gmail", "sentry"]);
+    expect(config.blockedToolkits).toEqual(["github"]);
+    expect(config.allowedToolSlugs).toEqual(["GMAIL_FETCH_EMAILS", "SENTRY_GET_ISSUES"]);
+    expect(config.blockedToolSlugs).toEqual(["GMAIL_DELETE_EMAIL"]);
+    expect(config.sessionTags).toEqual(["readOnlyHint", "destructiveHint"]);
+    expect(config.readOnlyMode).toBe(true);
+  });
+
+  it("throws when entry wrapper includes legacy flat config keys", () => {
+    expect(() =>
+      parseComposioConfig({
+        enabled: true,
+        defaultUserId: "legacy-user",
+        config: {
+          apiKey: "from-config",
+          defaultUserId: "new-user",
+        },
+      })
+    ).toThrow("Legacy Composio config shape detected. Run 'openclaw composio setup'.");
+  });
 });
 
 describe("toolkit filtering", () => {
@@ -106,6 +138,13 @@ describe("toolkit filtering", () => {
     const client = makeClient();
     const statuses = await client.getConnectionStatus(["gmail", "sentry", "github"]);
     expect(statuses).toHaveLength(3);
+  });
+
+  it("normalizes toolkit casing in filters and requests", async () => {
+    const client = makeClient({ allowedToolkits: ["GMAIL", "Sentry"] });
+    const statuses = await client.getConnectionStatus(["GMAIL", "sentry", "GitHub"]);
+    expect(statuses).toHaveLength(2);
+    expect(statuses.map((s) => s.toolkit)).toEqual(["gmail", "sentry"]);
   });
 
   it("filters by allowedToolkits", async () => {
@@ -166,9 +205,14 @@ describe("connection status", () => {
 describe("execute tool", () => {
   it("executes and returns result", async () => {
     const client = makeClient();
+    const instance = await getLatestComposioInstance();
     const result = await client.executeTool("GMAIL_FETCH_EMAILS", {});
     expect(result.success).toBe(true);
     expect(result.data).toEqual({ messages: [] });
+    expect(instance.tools.executeMetaTool).toHaveBeenCalledWith(
+      "COMPOSIO_MULTI_EXECUTE_TOOL",
+      expect.objectContaining({ sessionId: "test-session-123" })
+    );
   });
 
   it("rejects blocked toolkit", async () => {
@@ -176,6 +220,22 @@ describe("execute tool", () => {
     const result = await client.executeTool("GMAIL_FETCH_EMAILS", {});
     expect(result.success).toBe(false);
     expect(result.error).toContain("not allowed");
+  });
+
+  it("blocks likely-destructive tool slugs in readOnlyMode", async () => {
+    const client = makeClient({ readOnlyMode: true });
+    const result = await client.executeTool("GMAIL_DELETE_EMAIL", {});
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("readOnlyMode");
+  });
+
+  it("allows explicitly allowlisted tool slugs even in readOnlyMode", async () => {
+    const client = makeClient({
+      readOnlyMode: true,
+      allowedToolSlugs: ["gmail_delete_email"],
+    });
+    const result = await client.executeTool("GMAIL_DELETE_EMAIL", {});
+    expect(result.success).toBe(true);
   });
 
   it("pins execution to explicit connected_account_id", async () => {
@@ -239,7 +299,7 @@ describe("execute tool", () => {
       next_cursor: null,
     });
 
-    instance.client.tools.execute.mockResolvedValueOnce({
+    instance.tools.executeMetaTool.mockResolvedValueOnce({
       successful: false,
       error: "1 out of 1 tools failed",
       data: {
@@ -279,7 +339,7 @@ describe("execute tool", () => {
       next_cursor: null,
     });
 
-    instance.client.tools.execute.mockResolvedValueOnce({
+    instance.tools.executeMetaTool.mockResolvedValueOnce({
       successful: true,
       data: {
         results: [
@@ -340,6 +400,13 @@ describe("create connection", () => {
 });
 
 describe("disconnect toolkit", () => {
+  it("blocks disconnect in readOnlyMode", async () => {
+    const client = makeClient({ readOnlyMode: true });
+    const result = await client.disconnectToolkit("gmail", "default");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("readOnlyMode");
+  });
+
   it("disconnects single active account", async () => {
     const client = makeClient();
     const instance = await getLatestComposioInstance();
@@ -353,7 +420,7 @@ describe("disconnect toolkit", () => {
 
     const result = await client.disconnectToolkit("gmail", "default");
     expect(result.success).toBe(true);
-    expect(instance.connectedAccounts.delete).toHaveBeenCalledWith({ connectedAccountId: "ca_gmail" });
+    expect(instance.connectedAccounts.delete).toHaveBeenCalledWith("ca_gmail");
   });
 
   it("fails safely when multiple active accounts exist", async () => {
@@ -466,6 +533,69 @@ describe("session caching", () => {
     const instance = (Composio as any).mock.results[0].value;
     expect(instance.toolRouter.create).toHaveBeenCalledTimes(1);
   });
+
+  it("applies safety config to tool-router session creation", async () => {
+    const client = makeClient({
+      readOnlyMode: true,
+      sessionTags: ["destructiveHint"],
+      blockedToolSlugs: ["gmail_delete_email"],
+    });
+    await client.getConnectionStatus(["gmail"]);
+
+    const instance = await getLatestComposioInstance();
+    expect(instance.toolRouter.create).toHaveBeenCalledWith(
+      "default",
+      expect.objectContaining({
+        tags: expect.arrayContaining(["readOnlyHint", "destructiveHint"]),
+        tools: {
+          gmail: {
+            disable: ["GMAIL_DELETE_EMAIL"],
+          },
+        },
+      })
+    );
+  });
+
+  it("retries session creation without toolkit filters when backend rejects missing auth configs", async () => {
+    const client = makeClient({ allowedToolkits: ["gmail", "posthog"] });
+    const instance = await getLatestComposioInstance();
+    const session = {
+      sessionId: "test-session-retry",
+      tools: vi.fn().mockResolvedValue([]),
+      authorize: vi.fn().mockResolvedValue({ url: "https://connect.composio.dev/test" }),
+      toolkits: vi.fn().mockResolvedValue({
+        items: [{ slug: "gmail", name: "Gmail", connection: { isActive: true } }],
+      }),
+      experimental: { assistivePrompt: "" },
+    };
+
+    instance.toolRouter.create
+      .mockRejectedValueOnce(
+        new Error(
+          "The following toolkits require auth configs but none exist and cannot be auto-created: posthog. Please specify them in auth_configs."
+        )
+      )
+      .mockResolvedValueOnce(session);
+
+    const statuses = await client.getConnectionStatus(["gmail"], "default");
+
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]?.connected).toBe(true);
+    expect(instance.toolRouter.create).toHaveBeenNthCalledWith(
+      1,
+      "default",
+      expect.objectContaining({
+        toolkits: { enable: ["gmail", "posthog"] },
+      })
+    );
+    expect(instance.toolRouter.create).toHaveBeenNthCalledWith(
+      2,
+      "default",
+      expect.not.objectContaining({
+        toolkits: expect.anything(),
+      })
+    );
+  });
 });
 
 describe("execute tool string arguments (GLM-5 workaround)", () => {
@@ -537,7 +667,7 @@ describe("connections tool", () => {
     const details = result.details as any;
     const conn = details.connections.find((c: any) => c.toolkit === "affinity");
     expect(conn.connected).toBe(true);
-    expect(instance.client.tools.execute).not.toHaveBeenCalledWith(
+    expect(instance.tools.executeMetaTool).not.toHaveBeenCalledWith(
       "AFFINITY_GET_METADATA_ON_ALL_LISTS",
       expect.anything()
     );

@@ -1,5 +1,51 @@
 import { z } from "zod";
-import type { ComposioConfig } from "./types.js";
+import type { ComposioConfig, ComposioSessionTag } from "./types.js";
+
+const SESSION_TAGS = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const;
+const LEGACY_ENTRY_FLAT_CONFIG_KEYS = [
+  "apiKey",
+  "defaultUserId",
+  "allowedToolkits",
+  "blockedToolkits",
+  "readOnlyMode",
+  "sessionTags",
+  "allowedToolSlugs",
+  "blockedToolSlugs",
+] as const;
+
+function normalizeToolkitList(value?: unknown[]): string[] | undefined {
+  if (!value || value.length === 0) return undefined;
+  const normalized = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  if (normalized.length === 0) return undefined;
+  return Array.from(new Set(normalized));
+}
+
+function normalizeToolSlugList(value?: unknown[]): string[] | undefined {
+  if (!value || value.length === 0) return undefined;
+  const normalized = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean);
+  if (normalized.length === 0) return undefined;
+  return Array.from(new Set(normalized));
+}
+
+function normalizeSessionTags(value?: unknown[]): ComposioSessionTag[] | undefined {
+  if (!value || value.length === 0) return undefined;
+  const normalized = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item): item is ComposioSessionTag => SESSION_TAGS.includes(item as ComposioSessionTag));
+  if (normalized.length === 0) return undefined;
+  return Array.from(new Set(normalized));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
 /**
  * Zod schema for Composio plugin configuration
@@ -10,46 +56,48 @@ export const ComposioConfigSchema = z.object({
   defaultUserId: z.string().optional(),
   allowedToolkits: z.array(z.string()).optional(),
   blockedToolkits: z.array(z.string()).optional(),
+  readOnlyMode: z.boolean().default(false),
+  sessionTags: z.array(z.enum(SESSION_TAGS)).optional(),
+  allowedToolSlugs: z.array(z.string()).optional(),
+  blockedToolSlugs: z.array(z.string()).optional(),
 });
 
 /**
  * Parse and validate plugin config with environment fallbacks
  */
 export function parseComposioConfig(value: unknown): ComposioConfig {
-  const raw =
-    value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
+  const raw = isRecord(value) ? value : {};
+  const configObj = isRecord(raw.config) ? raw.config : undefined;
 
-  // Support both plugin entry shape ({ enabled, config: {...} }) and flat shape.
-  const configObj = raw.config as Record<string, unknown> | undefined;
-  const enabled =
-    (typeof raw.enabled === "boolean" ? raw.enabled : undefined) ??
-    (typeof configObj?.enabled === "boolean" ? configObj.enabled : undefined) ??
-    true;
-  const defaultUserId =
-    (typeof raw.defaultUserId === "string" ? raw.defaultUserId : undefined) ??
-    (typeof configObj?.defaultUserId === "string" ? configObj.defaultUserId : undefined);
-  const allowedToolkits =
-    (Array.isArray(raw.allowedToolkits) ? raw.allowedToolkits : undefined) ??
-    (Array.isArray(configObj?.allowedToolkits) ? configObj.allowedToolkits : undefined);
-  const blockedToolkits =
-    (Array.isArray(raw.blockedToolkits) ? raw.blockedToolkits : undefined) ??
-    (Array.isArray(configObj?.blockedToolkits) ? configObj.blockedToolkits : undefined);
+  if (configObj) {
+    const hasLegacyFlatKeys = LEGACY_ENTRY_FLAT_CONFIG_KEYS.some((key) => key in raw);
+    if (hasLegacyFlatKeys) {
+      throw new Error("Legacy Composio config shape detected. Run 'openclaw composio setup'.");
+    }
+  }
 
-  // Allow API key from config.apiKey, top-level apiKey, or environment.
+  const source = configObj ?? raw;
+  const enabled = typeof raw.enabled === "boolean" ? raw.enabled : true;
+  const readOnlyMode = typeof source.readOnlyMode === "boolean" ? source.readOnlyMode : false;
   const apiKey =
-    (typeof configObj?.apiKey === "string" && configObj.apiKey.trim()) ||
-    (typeof raw.apiKey === "string" && raw.apiKey.trim()) ||
+    (typeof source.apiKey === "string" && source.apiKey.trim()) ||
     process.env.COMPOSIO_API_KEY ||
     "";
 
   return ComposioConfigSchema.parse({
     enabled,
     apiKey,
-    defaultUserId,
-    allowedToolkits,
-    blockedToolkits,
+    defaultUserId: typeof source.defaultUserId === "string" ? source.defaultUserId : undefined,
+    allowedToolkits: normalizeToolkitList(Array.isArray(source.allowedToolkits) ? source.allowedToolkits : undefined),
+    blockedToolkits: normalizeToolkitList(Array.isArray(source.blockedToolkits) ? source.blockedToolkits : undefined),
+    readOnlyMode,
+    sessionTags: normalizeSessionTags(Array.isArray(source.sessionTags) ? source.sessionTags : undefined),
+    allowedToolSlugs: normalizeToolSlugList(
+      Array.isArray(source.allowedToolSlugs) ? source.allowedToolSlugs : undefined
+    ),
+    blockedToolSlugs: normalizeToolSlugList(
+      Array.isArray(source.blockedToolSlugs) ? source.blockedToolSlugs : undefined
+    ),
   });
 }
 
@@ -78,6 +126,26 @@ export const composioConfigUiHints = {
   blockedToolkits: {
     label: "Blocked Toolkits",
     help: "Block specific toolkits from being used",
+    advanced: true,
+  },
+  readOnlyMode: {
+    label: "Read-Only Mode",
+    help: "Block likely-destructive tool actions (delete/remove/update/write) by default",
+    advanced: true,
+  },
+  sessionTags: {
+    label: "Session Tags",
+    help: "Composio Tool Router behavior tags (e.g., readOnlyHint, destructiveHint)",
+    advanced: true,
+  },
+  allowedToolSlugs: {
+    label: "Allowed Tool Slugs",
+    help: "Optional explicit allowlist for tool slugs (UPPERCASE)",
+    advanced: true,
+  },
+  blockedToolSlugs: {
+    label: "Blocked Tool Slugs",
+    help: "Explicit denylist for tool slugs (UPPERCASE)",
     advanced: true,
   },
 };

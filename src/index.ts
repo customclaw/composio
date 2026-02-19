@@ -5,6 +5,31 @@ import { createComposioExecuteTool } from "./tools/execute.js";
 import { createComposioConnectionsTool } from "./tools/connections.js";
 import { registerComposioCli } from "./cli.js";
 
+const LEGACY_ENTRY_FLAT_CONFIG_KEYS = [
+  "apiKey",
+  "defaultUserId",
+  "allowedToolkits",
+  "blockedToolkits",
+  "readOnlyMode",
+  "sessionTags",
+  "allowedToolSlugs",
+  "blockedToolSlugs",
+] as const;
+const LEGACY_SHAPE_ERROR = "Legacy Composio config shape detected. Run 'openclaw composio setup'.";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasLegacyFlatEntryConfig(config: unknown): boolean {
+  const root = isRecord(config) ? config : undefined;
+  const plugins = isRecord(root?.plugins) ? root.plugins : undefined;
+  const entries = isRecord(plugins?.entries) ? plugins.entries : undefined;
+  const composioEntry = isRecord(entries?.composio) ? entries.composio : undefined;
+  if (!composioEntry) return false;
+  return LEGACY_ENTRY_FLAT_CONFIG_KEYS.some((key) => key in composioEntry);
+}
+
 /**
  * Composio Tool Router Plugin for OpenClaw
  *
@@ -34,7 +59,36 @@ const composioPlugin = {
   configSchema: composioPluginConfigSchema,
 
   register(api: any) {
+    if (hasLegacyFlatEntryConfig(api?.config)) {
+      throw new Error(LEGACY_SHAPE_ERROR);
+    }
+
     const config = parseComposioConfig(api.pluginConfig);
+    let client: ReturnType<typeof createComposioClient> | null = null;
+
+    const ensureClient = () => {
+      if (!config.apiKey) {
+        throw new Error(
+          "Composio API key required. Run 'openclaw composio setup' or set COMPOSIO_API_KEY."
+        );
+      }
+      if (!client) {
+        client = createComposioClient(config);
+      }
+      return client;
+    };
+
+    // Register CLI commands even without API key so setup/status tooling remains available.
+    api.registerCli(
+      ({ program }: { program: any }) =>
+        registerComposioCli({
+          program,
+          getClient: config.apiKey ? ensureClient : undefined,
+          config,
+          logger: api.logger,
+        }),
+      { commands: ["composio"] }
+    );
 
     if (!config.enabled) {
       api.logger.debug("[composio] Plugin disabled in config");
@@ -47,15 +101,6 @@ const composioPlugin = {
       );
       return;
     }
-
-    let client: ReturnType<typeof createComposioClient> | null = null;
-
-    const ensureClient = () => {
-      if (!client) {
-        client = createComposioClient(config);
-      }
-      return client;
-    };
 
     // Register tools (lazily create client on first use)
     api.registerTool({
@@ -78,18 +123,6 @@ const composioPlugin = {
         return createComposioConnectionsTool(ensureClient(), config).execute(toolCallId, params);
       },
     });
-
-    // Register CLI commands
-    api.registerCli(
-      ({ program }: { program: any }) =>
-        registerComposioCli({
-          program,
-          client: ensureClient(),
-          config,
-          logger: api.logger,
-        }),
-      { commands: ["composio"] }
-    );
 
     api.logger.info("[composio] Plugin registered with 3 tools and CLI commands");
   },
