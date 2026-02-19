@@ -388,7 +388,7 @@ export class ComposioClient {
     userId?: string,
     connectedAccountId?: string
   ): Promise<ToolExecutionResult> {
-    const uid = this.getUserId(userId);
+    const requestedUid = this.getUserId(userId);
     const normalizedToolSlug = normalizeToolSlug(toolSlug);
     const toolRestrictionError = this.getToolSlugRestrictionError(normalizedToolSlug);
     if (toolRestrictionError) {
@@ -405,15 +405,18 @@ export class ComposioClient {
 
     const accountResolution = await this.resolveConnectedAccountForExecution({
       toolkit,
-      userId: uid,
+      userId: requestedUid,
       connectedAccountId,
+      userIdWasExplicit: typeof userId === "string" && userId.trim().length > 0,
     });
     if ("error" in accountResolution) {
       return { success: false, error: accountResolution.error };
     }
 
+    const effectiveUid = accountResolution.userId || requestedUid;
+
     const session = await this.getSession(
-      uid,
+      effectiveUid,
       accountResolution.connectedAccountId
         ? { [toolkit]: accountResolution.connectedAccountId }
         : undefined
@@ -427,7 +430,7 @@ export class ComposioClient {
 
       if (!response.successful) {
         const recovered = await this.tryExecutionRecovery({
-          uid,
+          uid: effectiveUid,
           toolSlug: normalizedToolSlug,
           args,
           connectedAccountId: accountResolution.connectedAccountId,
@@ -457,7 +460,7 @@ export class ComposioClient {
       const toolResponse = result.response;
       if (!toolResponse.successful) {
         const recovered = await this.tryExecutionRecovery({
-          uid,
+          uid: effectiveUid,
           toolSlug: normalizedToolSlug,
           args,
           connectedAccountId: accountResolution.connectedAccountId,
@@ -659,19 +662,42 @@ export class ComposioClient {
     toolkit: string;
     userId: string;
     connectedAccountId?: string;
-  }): Promise<{ connectedAccountId?: string } | { error: string }> {
+    userIdWasExplicit?: boolean;
+  }): Promise<{ connectedAccountId?: string; userId?: string } | { error: string }> {
     const toolkit = normalizeToolkitSlug(params.toolkit);
     const { userId } = params;
     const explicitId = params.connectedAccountId?.trim();
 
     if (explicitId) {
       try {
-        const account = await this.client.connectedAccounts.get(explicitId) as {
+        let rawAccount: {
           status?: string;
           toolkit?: { slug?: string };
-        };
+          user_id?: string;
+          userId?: string;
+        } | undefined;
+
+        const retrieve = (this.client as any)?.client?.connectedAccounts?.retrieve;
+        if (typeof retrieve === "function") {
+          try {
+            rawAccount = await retrieve.call((this.client as any).client.connectedAccounts, explicitId);
+          } catch {
+            // Best-effort: fall through to SDK get() which may omit user_id.
+          }
+        }
+
+        if (!rawAccount) {
+          rawAccount = await this.client.connectedAccounts.get(explicitId) as {
+            status?: string;
+            toolkit?: { slug?: string };
+            userId?: string;
+            user_id?: string;
+          };
+        }
+        const account = rawAccount;
         const accountToolkit = normalizeToolkitSlug(String(account?.toolkit?.slug || ""));
         const accountStatus = String(account?.status || "").toUpperCase();
+        const accountUserId = String(account?.user_id || account?.userId || "").trim();
 
         if (accountToolkit && accountToolkit !== toolkit) {
           return {
@@ -683,7 +709,14 @@ export class ComposioClient {
             error: `Connected account '${explicitId}' is '${accountStatus}', not ACTIVE.`,
           };
         }
-        return { connectedAccountId: explicitId };
+        if (params.userIdWasExplicit && accountUserId && accountUserId !== userId) {
+          return {
+            error:
+              `Connected account '${explicitId}' belongs to user_id '${accountUserId}', ` +
+              `but '${userId}' was requested. Use matching user_id or omit user_id when providing connected_account_id.`,
+          };
+        }
+        return { connectedAccountId: explicitId, userId: accountUserId || undefined };
       } catch (err) {
         return {
           error: `Invalid connected_account_id '${explicitId}': ${err instanceof Error ? err.message : String(err)}`,

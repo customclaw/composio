@@ -244,6 +244,7 @@ describe("execute tool", () => {
     instance.connectedAccounts.get.mockResolvedValueOnce({
       toolkit: { slug: "gmail" },
       status: "ACTIVE",
+      user_id: "default",
     });
 
     const result = await client.executeTool("GMAIL_FETCH_EMAILS", {}, "default", "ca_explicit");
@@ -251,6 +252,37 @@ describe("execute tool", () => {
     expect(instance.toolRouter.create).toHaveBeenCalledWith("default", {
       connectedAccounts: { gmail: "ca_explicit" },
     });
+  });
+
+  it("uses connected account user_id when connected_account_id is provided without user_id", async () => {
+    const client = makeClient();
+    const instance = await getLatestComposioInstance();
+    instance.connectedAccounts.get.mockResolvedValueOnce({
+      toolkit: { slug: "gmail" },
+      status: "ACTIVE",
+      user_id: "customclaw",
+    });
+
+    const result = await client.executeTool("GMAIL_FETCH_EMAILS", {}, undefined, "ca_explicit");
+    expect(result.success).toBe(true);
+    expect(instance.toolRouter.create).toHaveBeenCalledWith("customclaw", {
+      connectedAccounts: { gmail: "ca_explicit" },
+    });
+  });
+
+  it("errors when explicit user_id does not match connected_account_id owner", async () => {
+    const client = makeClient();
+    const instance = await getLatestComposioInstance();
+    instance.connectedAccounts.get.mockResolvedValueOnce({
+      toolkit: { slug: "gmail" },
+      status: "ACTIVE",
+      user_id: "customclaw",
+    });
+
+    const result = await client.executeTool("GMAIL_FETCH_EMAILS", {}, "founding", "ca_explicit");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("belongs to user_id 'customclaw'");
+    expect(result.error).toContain("'founding' was requested");
   });
 
   it("auto-pins execution when one active account exists", async () => {
