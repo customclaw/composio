@@ -24,7 +24,7 @@ export const ComposioManageConnectionsToolSchema = Type.Object({
   ),
   user_id: Type.Optional(
     Type.String({
-      description: "User ID for session scoping (uses default if not provided)",
+      description: "User ID for session scoping. Strongly recommended to avoid checking the wrong scope.",
     })
   ),
   statuses: Type.Optional(
@@ -51,6 +51,7 @@ export function createComposioConnectionsTool(client: ComposioClient, _config: C
     async execute(_toolCallId: string, params: Record<string, unknown>) {
       const action = String(params.action || "status");
       const userId = typeof params.user_id === "string" ? params.user_id : undefined;
+      const userIdWasExplicit = typeof params.user_id === "string" && params.user_id.trim().length > 0;
 
       try {
         switch (action) {
@@ -145,14 +146,34 @@ export function createComposioConnectionsTool(client: ComposioClient, _config: C
             }
 
             const statuses = await client.getConnectionStatus(toolkitsToCheck, userId);
+            const disconnectedToolkits = statuses.filter((s) => !s.connected).map((s) => s.toolkit);
+            const hints: Array<{ toolkit: string; connected_user_ids: string[]; message: string }> = [];
+
+            if (!userIdWasExplicit) {
+              for (const toolkit of disconnectedToolkits) {
+                const activeUserIds = await client.findActiveUserIdsForToolkit(toolkit);
+                if (activeUserIds.length === 0) continue;
+                hints.push({
+                  toolkit,
+                  connected_user_ids: activeUserIds,
+                  message:
+                    `No user_id was provided, so status checked the default scope. ` +
+                    `'${toolkit}' has ACTIVE accounts under: ${activeUserIds.join(", ")}. ` +
+                    "Pass user_id explicitly for deterministic results.",
+                });
+              }
+            }
 
             const response = {
               action: "status",
+              checked_user_id: statuses[0]?.userId,
+              user_id_explicit: userIdWasExplicit,
               count: statuses.length,
               connections: statuses.map((s) => ({
                 toolkit: s.toolkit,
                 connected: s.connected,
               })),
+              ...(hints.length > 0 ? { hints } : {}),
             };
             return {
               content: [{ type: "text", text: JSON.stringify(response, null, 2) }],

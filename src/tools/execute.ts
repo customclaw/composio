@@ -14,7 +14,7 @@ export const ComposioExecuteToolSchema = Type.Object({
   }),
   user_id: Type.Optional(
     Type.String({
-      description: "User ID for session scoping (uses default if not provided)",
+      description: "User ID for session scoping. Strongly recommended to avoid executing in the wrong scope.",
     })
   ),
   connected_account_id: Type.Optional(

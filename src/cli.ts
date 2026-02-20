@@ -321,10 +321,12 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
       try {
         const toolkitSlug = toolkit ? normalizeToolkitSlug(toolkit) : undefined;
         const toolkits = toolkitSlug ? [toolkitSlug] : undefined;
+        const currentUserId = options.userId || config.defaultUserId || "default";
         const statuses = await composioClient.getConnectionStatus(toolkits, options.userId);
 
         console.log("\nComposio Connection Status:");
         console.log("─".repeat(40));
+        console.log(`  Scope user_id: ${currentUserId}${options.userId ? " (explicit)" : " (default)"}`);
 
         if (statuses.length === 0) {
           console.log("  No connections found");
@@ -337,7 +339,6 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
         }
 
         if (toolkitSlug && statuses.length === 1 && !statuses[0]?.connected) {
-          const currentUserId = options.userId || config.defaultUserId || "default";
           const activeUserIds = await composioClient.findActiveUserIdsForToolkit(toolkitSlug);
           const otherUserIds = activeUserIds.filter((uid) => uid !== currentUserId);
 

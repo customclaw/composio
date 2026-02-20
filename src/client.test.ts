@@ -713,6 +713,30 @@ describe("connections tool", () => {
     expect(conn.connected).toBe(false);
   });
 
+  it("status returns scope hint when user_id is omitted and toolkit is connected in another scope", async () => {
+    const tool = makeConnectionsTool();
+    const instance = await getLatestComposioInstance();
+    instance.client.connectedAccounts.list.mockResolvedValueOnce({
+      items: [
+        {
+          id: "ca_sentry_custom",
+          user_id: "customclaw",
+          status: "ACTIVE",
+          toolkit: { slug: "sentry" },
+        },
+      ],
+      next_cursor: null,
+    });
+
+    const result = await tool.execute("test", { action: "status", toolkit: "sentry" });
+    const details = result.details as any;
+    expect(details.user_id_explicit).toBe(false);
+    expect(details.hints?.[0]).toMatchObject({
+      toolkit: "sentry",
+      connected_user_ids: ["customclaw"],
+    });
+  });
+
   it("accounts action returns connected accounts", async () => {
     const tool = makeConnectionsTool();
     const instance = await getLatestComposioInstance();

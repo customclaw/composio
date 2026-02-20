@@ -96,7 +96,7 @@ may look disconnected.
 Tips:
 
 - Set `defaultUserId` in plugin config for your app's primary identity.
-- Use `--user-id` explicitly when checking status/connect/disconnect.
+- Prefer passing `user_id`/`--user-id` explicitly when checking status, connecting, disconnecting, or executing tools.
 - Use `openclaw composio accounts <toolkit>` to discover which `user_id` owns active connections.
 
 ## Updating
