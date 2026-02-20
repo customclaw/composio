@@ -8,6 +8,11 @@ OpenClaw plugin that connects your agent to Gmail, Sentry, and other services th
 openclaw plugins install @customclaw/composio
 ```
 
+## Identifiers
+
+- Install spec: `@customclaw/composio`
+- Plugin id: `composio` (used in `plugins.entries.*` and `plugins update`)
+
 ## Setup
 
 1. Get an API key from [platform.composio.dev/settings](https://platform.composio.dev/settings)
@@ -102,7 +107,7 @@ Tips:
 ## Updating
 
 ```bash
-openclaw plugins update @customclaw/composio
+openclaw plugins update composio
 openclaw gateway restart
 ```
 
