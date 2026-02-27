@@ -45,12 +45,13 @@ class MockCommand {
   }
 }
 
-function buildCliFixture(config: { enabled: boolean }) {
+function buildCliFixture(config: { enabled: boolean }, getClient?: () => any) {
   const root = new MockCommand("root");
   const logs: LoggerEntry[] = [];
 
   registerComposioCli({
     program: root,
+    getClient: getClient as any,
     config,
     logger: {
       info: (message: string) => logs.push({ level: "info", message }),
@@ -64,7 +65,7 @@ function buildCliFixture(config: { enabled: boolean }) {
   const setup = composio.findCommand("setup");
   if (!setup) throw new Error("setup command was not registered");
 
-  return { setup, logs };
+  return { composio, setup, logs };
 }
 
 describe("composio setup cli", () => {
@@ -96,9 +97,7 @@ describe("composio setup cli", () => {
             entries: {
               composio: {
                 enabled: false,
-                config: {
-                  defaultUserId: "existing-user",
-                },
+                config: {},
               },
             },
           },
@@ -204,7 +203,6 @@ describe("composio setup cli", () => {
                 customMetadata: "preserve-me",
                 config: {
                   apiKey: "legacy-key",
-                  defaultUserId: "nested-legacy-user",
                   allowedToolkits: ["sentry"],
                   blockedToolkits: ["posthog"],
                   readOnlyMode: true,
@@ -221,7 +219,6 @@ describe("composio setup cli", () => {
     await setup.runAction({
       configPath,
       apiKey: "updated-key",
-      defaultUserId: "updated-user",
       allowedToolkits: "gmail,sentry",
       blockedToolkits: "posthog",
       readOnly: "false",
@@ -239,15 +236,29 @@ describe("composio setup cli", () => {
     expect(composioEntry.readOnlyMode).toBeUndefined();
 
     expect(composioEntry.config.apiKey).toBe("updated-key");
-    expect(composioEntry.config.defaultUserId).toBe("updated-user");
+    expect(composioEntry.config.defaultUserId).toBeUndefined();
     expect(composioEntry.config.allowedToolkits).toEqual(["gmail", "sentry"]);
     expect(composioEntry.config.blockedToolkits).toEqual(["posthog"]);
     expect(composioEntry.config.readOnlyMode).toBe(false);
 
     const effectiveConfig = parseComposioConfig(composioEntry);
-    expect(effectiveConfig.defaultUserId).toBe("updated-user");
+    expect(effectiveConfig).not.toHaveProperty("defaultUserId");
     expect(effectiveConfig.allowedToolkits).toEqual(["gmail", "sentry"]);
     expect(effectiveConfig.blockedToolkits).toEqual(["posthog"]);
     expect(effectiveConfig.readOnlyMode).toBe(false);
+  });
+
+  it("requires --user-id for list command", async () => {
+    const client = {
+      listToolkits: vi.fn().mockResolvedValue(["gmail"]),
+    };
+    const { composio, logs } = buildCliFixture({ enabled: true }, () => client);
+    const list = composio.findCommand("list");
+    if (!list) throw new Error("list command was not registered");
+
+    await list.runAction({});
+
+    expect(logs.some((entry) => entry.message.includes("--user-id is required"))).toBe(true);
+    expect(client.listToolkits).not.toHaveBeenCalled();
   });
 });

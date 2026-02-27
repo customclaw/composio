@@ -12,11 +12,9 @@ export const ComposioExecuteToolSchema = Type.Object({
   arguments: Type.Unknown({
     description: "Tool arguments matching the tool's parameter schema",
   }),
-  user_id: Type.Optional(
-    Type.String({
-      description: "User ID for session scoping. Strongly recommended to avoid executing in the wrong scope.",
-    })
-  ),
+  user_id: Type.String({
+    description: "Required user ID for session scoping.",
+  }),
   connected_account_id: Type.Optional(
     Type.String({
       description: "Optional connected account ID to pin execution to a specific account when multiple are connected",
@@ -55,7 +53,13 @@ export function createComposioExecuteTool(client: ComposioClient, _config: Compo
           ? (rawArgs as Record<string, unknown>)
           : {};
 
-      const userId = typeof params.user_id === "string" ? params.user_id : undefined;
+      const userId = typeof params.user_id === "string" ? params.user_id.trim() : "";
+      if (!userId) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: "user_id is required" }, null, 2) }],
+          details: { error: "user_id is required" },
+        };
+      }
       const connectedAccountId =
         typeof params.connected_account_id === "string" ? params.connected_account_id : undefined;
 

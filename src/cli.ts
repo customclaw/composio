@@ -50,6 +50,17 @@ function normalizePluginIdList(value: unknown): string[] | undefined {
   return Array.from(new Set(normalized));
 }
 
+function requireUserId(
+  rawUserId: unknown,
+  logger: PluginLogger,
+  commandUsage: string
+): string | null {
+  const userId = String(rawUserId || "").trim();
+  if (userId) return userId;
+  logger.error(`--user-id is required. Usage: ${commandUsage}`);
+  return null;
+}
+
 async function readOpenClawConfig(configPath: string): Promise<Record<string, unknown>> {
   try {
     const raw = await readFile(configPath, "utf8");
@@ -90,7 +101,6 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
     .description("Create or update Composio config in ~/.openclaw/openclaw.json")
     .option("-c, --config-path <path>", "OpenClaw config file path", DEFAULT_OPENCLAW_CONFIG_PATH)
     .option("--api-key <apiKey>", "Composio API key")
-    .option("--default-user-id <userId>", "Default user ID for Composio user scoping")
     .option("--allowed-toolkits <toolkits>", "Comma-separated allowed toolkit slugs")
     .option("--blocked-toolkits <toolkits>", "Comma-separated blocked toolkit slugs")
     .option("--read-only <enabled>", "Enable read-only mode (true/false)")
@@ -98,7 +108,6 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
     .action(async (options: {
       configPath: string;
       apiKey?: string;
-      defaultUserId?: string;
       allowedToolkits?: string;
       blockedToolkits?: string;
       readOnly?: string;
@@ -154,11 +163,6 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
           String(config.apiKey || "").trim() ||
           String(process.env.COMPOSIO_API_KEY || "").trim();
 
-        let defaultUserId =
-          String(options.defaultUserId || "").trim() ||
-          String(existingComposioConfig.defaultUserId || "").trim() ||
-          String(config.defaultUserId || "").trim();
-
         let allowedToolkits =
           parseCsvToolkits(options.allowedToolkits) ||
           (Array.isArray(existingComposioConfig.allowedToolkits)
@@ -191,11 +195,6 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
               `Composio API key${apiKey ? " [configured]" : ""}: `
             );
             if (apiKeyPrompt.trim()) apiKey = apiKeyPrompt.trim();
-
-            const defaultUserPrompt = await rl.question(
-              `Default user ID${defaultUserId ? ` [${defaultUserId}]` : " (optional)"}: `
-            );
-            if (defaultUserPrompt.trim()) defaultUserId = defaultUserPrompt.trim();
 
             const allowedDefault = allowedToolkits && allowedToolkits.length > 0
               ? ` [${allowedToolkits.join(",")}]`
@@ -237,11 +236,7 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
           apiKey,
           readOnlyMode,
         };
-        if (defaultUserId) {
-          mergedComposioConfig.defaultUserId = defaultUserId;
-        } else {
-          delete mergedComposioConfig.defaultUserId;
-        }
+        delete mergedComposioConfig.defaultUserId;
         if (allowedToolkits && allowedToolkits.length > 0) {
           mergedComposioConfig.allowedToolkits = allowedToolkits;
         } else {
@@ -267,7 +262,6 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
         console.log("\nComposio setup saved.");
         console.log("─".repeat(40));
         console.log(`Config: ${configPath}`);
-        console.log(`defaultUserId: ${defaultUserId || "default"}`);
         console.log(`readOnlyMode: ${readOnlyMode ? "enabled" : "disabled"}`);
         if (updatedPluginSystemEnabled) {
           console.log("plugins.enabled: set to true");
@@ -291,13 +285,15 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
   composio
     .command("list")
     .description("List available Composio toolkits")
-    .option("-u, --user-id <userId>", "User ID for session scoping")
+    .option("-u, --user-id <userId>", "Required user ID for session scoping")
     .action(async (options: { userId?: string }) => {
       const composioClient = requireClient();
       if (!composioClient) return;
+      const userId = requireUserId(options.userId, logger, "openclaw composio list --user-id <user-id>");
+      if (!userId) return;
 
       try {
-        const toolkits = await composioClient.listToolkits(options.userId);
+        const toolkits = await composioClient.listToolkits(userId);
         console.log("\nAvailable Composio Toolkits:");
         console.log("─".repeat(40));
         for (const toolkit of toolkits.sort()) {
@@ -313,20 +309,21 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
   composio
     .command("status [toolkit]")
     .description("Check connection status for toolkits")
-    .option("-u, --user-id <userId>", "User ID for session scoping")
+    .option("-u, --user-id <userId>", "Required user ID for session scoping")
     .action(async (toolkit: string | undefined, options: { userId?: string }) => {
       const composioClient = requireClient();
       if (!composioClient) return;
+      const userId = requireUserId(options.userId, logger, "openclaw composio status [toolkit] --user-id <user-id>");
+      if (!userId) return;
 
       try {
         const toolkitSlug = toolkit ? normalizeToolkitSlug(toolkit) : undefined;
         const toolkits = toolkitSlug ? [toolkitSlug] : undefined;
-        const currentUserId = options.userId || config.defaultUserId || "default";
-        const statuses = await composioClient.getConnectionStatus(toolkits, options.userId);
+        const statuses = await composioClient.getConnectionStatus(toolkits, userId);
 
         console.log("\nComposio Connection Status:");
         console.log("─".repeat(40));
-        console.log(`  Scope user_id: ${currentUserId}${options.userId ? " (explicit)" : " (default)"}`);
+        console.log(`  Scope user_id: ${userId}`);
 
         if (statuses.length === 0) {
           console.log("  No connections found");
@@ -340,7 +337,7 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
 
         if (toolkitSlug && statuses.length === 1 && !statuses[0]?.connected) {
           const activeUserIds = await composioClient.findActiveUserIdsForToolkit(toolkitSlug);
-          const otherUserIds = activeUserIds.filter((uid) => uid !== currentUserId);
+          const otherUserIds = activeUserIds.filter((uid) => uid !== userId);
 
           if (otherUserIds.length > 0) {
             console.log(`\n  Hint: '${toolkitSlug}' is connected under other user_id(s): ${otherUserIds.join(", ")}`);
@@ -399,18 +396,19 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
   composio
     .command("connect <toolkit>")
     .description("Connect to a Composio toolkit (opens auth URL)")
-    .option("-u, --user-id <userId>", "User ID for session scoping")
+    .option("-u, --user-id <userId>", "Required user ID for session scoping")
     .action(async (toolkit: string, options: { userId?: string }) => {
       const composioClient = requireClient();
       if (!composioClient) return;
+      const userId = requireUserId(options.userId, logger, "openclaw composio connect <toolkit> --user-id <user-id>");
+      if (!userId) return;
 
       try {
         const toolkitSlug = normalizeToolkitSlug(toolkit);
-        const currentUserId = options.userId || config.defaultUserId || "default";
         console.log(`\nInitiating connection to ${toolkitSlug}...`);
-        console.log(`Using user_id: ${currentUserId}`);
+        console.log(`Using user_id: ${userId}`);
 
-        const result = await composioClient.createConnection(toolkitSlug, options.userId);
+        const result = await composioClient.createConnection(toolkitSlug, userId);
 
         if ("error" in result) {
           logger.error(`Failed to create connection: ${result.error}`);
@@ -421,7 +419,7 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
         console.log("─".repeat(40));
         console.log(result.authUrl);
         console.log("\nOpen this URL in your browser to authenticate.");
-        console.log(`After authentication, run 'openclaw composio status ${toolkitSlug} --user-id ${currentUserId}' to verify.\n`);
+        console.log(`After authentication, run 'openclaw composio status ${toolkitSlug} --user-id ${userId}' to verify.\n`);
 
         // Try to open URL in browser
         try {
@@ -446,16 +444,18 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
   composio
     .command("disconnect <toolkit>")
     .description("Disconnect from a Composio toolkit")
-    .option("-u, --user-id <userId>", "User ID for session scoping")
+    .option("-u, --user-id <userId>", "Required user ID for session scoping")
     .action(async (toolkit: string, options: { userId?: string }) => {
       const composioClient = requireClient();
       if (!composioClient) return;
+      const userId = requireUserId(options.userId, logger, "openclaw composio disconnect <toolkit> --user-id <user-id>");
+      if (!userId) return;
 
       try {
         const toolkitSlug = normalizeToolkitSlug(toolkit);
         console.log(`\nDisconnecting from ${toolkitSlug}...`);
 
-        const result = await composioClient.disconnectToolkit(toolkitSlug, options.userId);
+        const result = await composioClient.disconnectToolkit(toolkitSlug, userId);
 
         if (result.success) {
           console.log(`Successfully disconnected from ${toolkitSlug}\n`);
@@ -473,10 +473,12 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
     .description("Search for tools matching a query")
     .option("-t, --toolkit <toolkit>", "Limit search to a specific toolkit")
     .option("-l, --limit <limit>", "Maximum results", "10")
-    .option("-u, --user-id <userId>", "User ID for session scoping")
+    .option("-u, --user-id <userId>", "Required user ID for session scoping")
     .action(async (query: string, options: { toolkit?: string; limit: string; userId?: string }) => {
       const composioClient = requireClient();
       if (!composioClient) return;
+      const userId = requireUserId(options.userId, logger, "openclaw composio search <query> --user-id <user-id>");
+      if (!userId) return;
 
       try {
         const limit = parseInt(options.limit, 10) || 10;
@@ -485,7 +487,7 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
         const results = await composioClient.searchTools(query, {
           toolkits,
           limit,
-          userId: options.userId,
+          userId,
         });
 
         console.log(`\nSearch results for "${query}":`);

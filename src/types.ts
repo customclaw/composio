@@ -11,7 +11,6 @@ export type ComposioSessionTag =
 export interface ComposioConfig {
   enabled: boolean;
   apiKey?: string;
-  defaultUserId?: string;
   allowedToolkits?: string[];
   blockedToolkits?: string[];
   readOnlyMode?: boolean;
@@ -37,7 +36,7 @@ export interface ToolExecutionResult {
 export interface ConnectionStatus {
   toolkit: string;
   connected: boolean;
-  userId?: string;
+  userId: string;
   authUrl?: string;
 }
 

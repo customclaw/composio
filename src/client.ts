@@ -90,10 +90,15 @@ export class ComposioClient {
   }
 
   /**
-   * Get the user ID to use for API calls
+   * Resolve user ID for API calls.
+   * This plugin requires explicit user_id scoping to avoid accidental cross-user access.
    */
   private getUserId(overrideUserId?: string): string {
-    return overrideUserId || this.config.defaultUserId || "default";
+    const userId = String(overrideUserId || "").trim();
+    if (!userId) {
+      throw new Error("user_id is required. Pass user_id explicitly.");
+    }
+    return userId;
   }
 
   /**
@@ -185,38 +190,9 @@ export class ComposioClient {
       return this.sessionCache.get(key)!;
     }
     const sessionConfig = this.buildSessionConfig(normalizedConnectedAccounts);
-    let session: ToolRouterSession;
-    try {
-      session = await this.client.toolRouter.create(userId, sessionConfig);
-    } catch (err) {
-      if (!this.shouldRetrySessionWithoutToolkitFilters(err, sessionConfig)) {
-        throw err;
-      }
-
-      const { toolkits: _removedToolkits, ...retryWithoutToolkits } = sessionConfig ?? {};
-      const retryConfig = Object.keys(retryWithoutToolkits).length > 0
-        ? (retryWithoutToolkits as ToolRouterCreateSessionConfig)
-        : undefined;
-      session = await this.client.toolRouter.create(userId, retryConfig);
-    }
-
+    const session = await this.client.toolRouter.create(userId, sessionConfig);
     this.sessionCache.set(key, session);
     return session;
-  }
-
-  private shouldRetrySessionWithoutToolkitFilters(
-    err: unknown,
-    sessionConfig?: ToolRouterCreateSessionConfig
-  ): boolean {
-    const enabledToolkits = (sessionConfig?.toolkits as { enable?: unknown } | undefined)?.enable;
-    if (!Array.isArray(enabledToolkits) || enabledToolkits.length === 0) {
-      return false;
-    }
-    const message = String(err instanceof Error ? err.message : err || "").toLowerCase();
-    return (
-      message.includes("require auth configs but none exist") &&
-      message.includes("please specify them in auth_configs")
-    );
   }
 
   private clearUserSessionCache(userId: string) {
@@ -429,15 +405,6 @@ export class ComposioClient {
       });
 
       if (!response.successful) {
-        const recovered = await this.tryExecutionRecovery({
-          uid: effectiveUid,
-          toolSlug: normalizedToolSlug,
-          args,
-          connectedAccountId: accountResolution.connectedAccountId,
-          metaError: response.error,
-          metaData: response.data,
-        });
-        if (recovered) return recovered;
         return { success: false, error: response.error || "Execution failed" };
       }
 
@@ -447,6 +414,7 @@ export class ComposioClient {
         response: {
           successful: boolean;
           data?: unknown;
+          data_preview?: unknown;
           error?: string | null;
         };
       }>) || [];
@@ -458,21 +426,10 @@ export class ComposioClient {
 
       // Response data is nested under result.response
       const toolResponse = result.response;
-      if (!toolResponse.successful) {
-        const recovered = await this.tryExecutionRecovery({
-          uid: effectiveUid,
-          toolSlug: normalizedToolSlug,
-          args,
-          connectedAccountId: accountResolution.connectedAccountId,
-          metaError: toolResponse.error ?? undefined,
-          metaData: response.data,
-        });
-        if (recovered) return recovered;
-      }
-
+      const toolData = toolResponse.data ?? toolResponse.data_preview;
       return {
         success: toolResponse.successful,
-        data: toolResponse.data,
+        data: toolData,
         error: toolResponse.error ?? undefined,
       };
     } catch (err) {
@@ -481,181 +438,6 @@ export class ComposioClient {
         error: err instanceof Error ? err.message : String(err),
       };
     }
-  }
-
-  private async tryExecutionRecovery(params: {
-    uid: string;
-    toolSlug: string;
-    args: Record<string, unknown>;
-    connectedAccountId?: string;
-    metaError?: string;
-    metaData?: Record<string, unknown>;
-  }): Promise<ToolExecutionResult | null> {
-    const directFallback = await this.tryDirectExecutionFallback(params);
-    if (directFallback?.success) return directFallback;
-
-    const hintedRetry = await this.tryHintedIdentifierRetry({
-      ...params,
-      additionalError: directFallback?.error,
-    });
-    if (hintedRetry) return hintedRetry;
-
-    return directFallback;
-  }
-
-  private async tryDirectExecutionFallback(params: {
-    uid: string;
-    toolSlug: string;
-    args: Record<string, unknown>;
-    connectedAccountId?: string;
-    metaError?: string;
-    metaData?: Record<string, unknown>;
-  }): Promise<ToolExecutionResult | null> {
-    if (!this.shouldFallbackToDirectExecution(params.uid, params.metaError, params.metaData)) {
-      return null;
-    }
-
-    return this.executeDirectTool(
-      params.toolSlug,
-      params.uid,
-      params.args,
-      params.connectedAccountId
-    );
-  }
-
-  private async executeDirectTool(
-    toolSlug: string,
-    userId: string,
-    args: Record<string, unknown>,
-    connectedAccountId?: string
-  ): Promise<ToolExecutionResult> {
-    try {
-      const response = await this.client.tools.execute(toolSlug, {
-        userId,
-        connectedAccountId,
-        arguments: args,
-        dangerouslySkipVersionCheck: true,
-      });
-
-      return {
-        success: Boolean(response?.successful),
-        data: response?.data,
-        error: response?.error ?? undefined,
-      };
-    } catch (err) {
-      return {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-  }
-
-  private async tryHintedIdentifierRetry(params: {
-    uid: string;
-    toolSlug: string;
-    args: Record<string, unknown>;
-    connectedAccountId?: string;
-    metaError?: string;
-    metaData?: Record<string, unknown>;
-    additionalError?: string;
-  }): Promise<ToolExecutionResult | null> {
-    const combined = this.buildCombinedErrorText(params.metaError, params.metaData, params.additionalError);
-    if (!this.shouldRetryFromServerHint(combined)) return null;
-
-    const hint = this.extractServerHintLiteral(combined);
-    if (!hint) return null;
-
-    const retryArgs = this.buildRetryArgsFromHint(params.args, combined, hint);
-    if (!retryArgs) return null;
-
-    return this.executeDirectTool(
-      params.toolSlug,
-      params.uid,
-      retryArgs,
-      params.connectedAccountId
-    );
-  }
-
-  private shouldFallbackToDirectExecution(
-    uid: string,
-    metaError?: string,
-    metaData?: Record<string, unknown>
-  ): boolean {
-    if (uid === "default") return false;
-    const combined = this.buildCombinedErrorText(metaError, metaData).toLowerCase();
-    return combined.includes("no connected account found for entity id default");
-  }
-
-  private shouldRetryFromServerHint(errorText: string): boolean {
-    const lower = errorText.toLowerCase();
-    return (
-      lower.includes("only allowed to access") ||
-      lower.includes("allowed to access the")
-    );
-  }
-
-  private extractServerHintLiteral(errorText: string): string | undefined {
-    const matches = errorText.match(/`([^`]+)`/);
-    if (!matches?.[1]) return undefined;
-    const literal = matches[1].trim();
-    if (!literal) return undefined;
-    if (literal.length > 64) return undefined;
-    if (/\s/.test(literal)) return undefined;
-    return literal;
-  }
-
-  private buildRetryArgsFromHint(
-    args: Record<string, unknown>,
-    errorText: string,
-    hint: string
-  ): Record<string, unknown> | null {
-    const stringEntries = Object.entries(args).filter(
-      ([, value]) => typeof value === "string"
-    ) as Array<[string, string]>;
-
-    if (stringEntries.length === 1) {
-      const [field, current] = stringEntries[0];
-      if (current === hint) return null;
-      return { ...args, [field]: hint };
-    }
-
-    if (stringEntries.length === 0) {
-      const missing = this.extractSingleMissingField(errorText);
-      if (!missing) return null;
-      return { ...args, [missing]: hint };
-    }
-
-    return null;
-  }
-
-  private extractSingleMissingField(errorText: string): string | undefined {
-    const match = errorText.match(/following fields are missing:\s*\{([^}]+)\}/i);
-    const raw = match?.[1];
-    if (!raw) return undefined;
-
-    const fields = raw
-      .split(",")
-      .map(part => part.trim().replace(/^['"]|['"]$/g, ""))
-      .filter(Boolean);
-
-    return fields.length === 1 ? fields[0] : undefined;
-  }
-
-  private buildCombinedErrorText(
-    metaError?: string,
-    metaData?: Record<string, unknown>,
-    additionalError?: string
-  ): string {
-    return [metaError, this.extractNestedMetaError(metaData), additionalError]
-      .map(v => String(v || "").trim())
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  private extractNestedMetaError(metaData?: Record<string, unknown>): string {
-    const results = (metaData?.results as Array<{ error?: string }> | undefined) || [];
-    const first = results[0];
-    return String(first?.error || "");
   }
 
   private async resolveConnectedAccountForExecution(params: {
@@ -670,31 +452,12 @@ export class ComposioClient {
 
     if (explicitId) {
       try {
-        let rawAccount: {
+        const account = await this.client.connectedAccounts.get(explicitId) as {
           status?: string;
           toolkit?: { slug?: string };
-          user_id?: string;
           userId?: string;
-        } | undefined;
-
-        const retrieve = (this.client as any)?.client?.connectedAccounts?.retrieve;
-        if (typeof retrieve === "function") {
-          try {
-            rawAccount = await retrieve.call((this.client as any).client.connectedAccounts, explicitId);
-          } catch {
-            // Best-effort: fall through to SDK get() which may omit user_id.
-          }
-        }
-
-        if (!rawAccount) {
-          rawAccount = await this.client.connectedAccounts.get(explicitId) as {
-            status?: string;
-            toolkit?: { slug?: string };
-            userId?: string;
-            user_id?: string;
-          };
-        }
-        const account = rawAccount;
+          user_id?: string;
+        };
         const accountToolkit = normalizeToolkitSlug(String(account?.toolkit?.slug || ""));
         const accountStatus = String(account?.status || "").toUpperCase();
         const accountUserId = String(account?.user_id || account?.userId || "").trim();
@@ -716,7 +479,24 @@ export class ComposioClient {
               `but '${userId}' was requested. Use matching user_id or omit user_id when providing connected_account_id.`,
           };
         }
-        return { connectedAccountId: explicitId, userId: accountUserId || undefined };
+        if (!accountUserId) {
+          // Fail closed: when owner is omitted by API, verify this account is ACTIVE in requested user scope.
+          const accountMatchesRequestedUser = await this.isConnectedAccountActiveForUser(
+            toolkit,
+            userId,
+            explicitId
+          );
+          if (!accountMatchesRequestedUser) {
+            return {
+              error:
+                `Connected account '${explicitId}' ownership could not be verified for user_id '${userId}'. ` +
+                "Use a connected_account_id that belongs to this user_id and is ACTIVE.",
+            };
+          }
+          return { connectedAccountId: explicitId, userId };
+        }
+
+        return { connectedAccountId: explicitId, userId: accountUserId };
       } catch (err) {
         return {
           error: `Invalid connected_account_id '${explicitId}': ${err instanceof Error ? err.message : String(err)}`,
@@ -740,6 +520,19 @@ export class ComposioClient {
         `Multiple ACTIVE '${toolkit}' accounts found for user_id '${userId}': ${ids}. ` +
         "Please provide connected_account_id to choose one explicitly.",
     };
+  }
+
+  private async isConnectedAccountActiveForUser(
+    toolkit: string,
+    userId: string,
+    connectedAccountId: string
+  ): Promise<boolean> {
+    const activeAccounts = await this.listConnectedAccounts({
+      toolkits: [toolkit],
+      userIds: [userId],
+      statuses: ["ACTIVE"],
+    });
+    return activeAccounts.some((account) => account.id === connectedAccountId);
   }
 
   /**
@@ -938,12 +731,17 @@ export class ComposioClient {
     userIds?: string[];
     statuses?: ConnectedAccountStatusFilter[];
   }): Promise<ConnectedAccountSummary[]> {
+    const rawList = (this.client as any)?.client?.connectedAccounts?.list;
+    if (typeof rawList !== "function") {
+      throw new Error("Raw connected accounts list API unavailable");
+    }
+
     const accounts: ConnectedAccountSummary[] = [];
     let cursor: string | null | undefined;
     const seenCursors = new Set<string>();
 
     do {
-      const response = await (this.client as any).client.connectedAccounts.list({
+      const response = await rawList.call((this.client as any).client.connectedAccounts, {
         ...(options?.toolkits && options.toolkits.length > 0 ? { toolkit_slugs: options.toolkits } : {}),
         ...(options?.userIds && options.userIds.length > 0 ? { user_ids: options.userIds } : {}),
         ...(options?.statuses && options.statuses.length > 0 ? { statuses: options.statuses } : {}),
@@ -967,20 +765,32 @@ export class ComposioClient {
         accounts.push({
           id: String(item.id || ""),
           toolkit: toolkitSlug,
-          userId: typeof item.user_id === "string" ? item.user_id : undefined,
+          userId: typeof item.user_id === "string"
+            ? item.user_id
+            : (typeof item.userId === "string" ? item.userId : undefined),
           status: typeof item.status === "string" ? item.status : undefined,
           authConfigId: typeof (item.auth_config as { id?: string } | undefined)?.id === "string"
             ? (item.auth_config as { id?: string }).id
-            : undefined,
-          isDisabled: typeof item.is_disabled === "boolean" ? item.is_disabled : undefined,
-          createdAt: typeof item.created_at === "string" ? item.created_at : undefined,
-          updatedAt: typeof item.updated_at === "string" ? item.updated_at : undefined,
+            : (typeof (item.authConfig as { id?: string } | undefined)?.id === "string"
+              ? (item.authConfig as { id?: string }).id
+              : undefined),
+          isDisabled: typeof item.is_disabled === "boolean"
+            ? item.is_disabled
+            : (typeof item.isDisabled === "boolean" ? item.isDisabled : undefined),
+          createdAt: typeof item.created_at === "string"
+            ? item.created_at
+            : (typeof item.createdAt === "string" ? item.createdAt : undefined),
+          updatedAt: typeof item.updated_at === "string"
+            ? item.updated_at
+            : (typeof item.updatedAt === "string" ? item.updatedAt : undefined),
         });
       }
 
       cursor = Array.isArray(response)
         ? null
-        : ((response as { next_cursor?: string | null })?.next_cursor ?? null);
+        : (((response as { next_cursor?: string | null })?.next_cursor)
+          ?? ((response as { nextCursor?: string | null })?.nextCursor)
+          ?? null);
       if (!cursor) break;
       if (seenCursors.has(cursor)) break;
       seenCursors.add(cursor);
@@ -1023,6 +833,9 @@ export class ComposioClient {
         accounts.push({
           id: String(item.id || ""),
           toolkit: toolkitSlug,
+          userId: typeof item.userId === "string"
+            ? item.userId
+            : (typeof item.user_id === "string" ? item.user_id : undefined),
           status: typeof item.status === "string" ? item.status : undefined,
           authConfigId: typeof (item.authConfig as { id?: string } | undefined)?.id === "string"
             ? (item.authConfig as { id?: string }).id
@@ -1065,7 +878,11 @@ export class ComposioClient {
     try {
       const session = await this.getSession(uid);
       const result = await session.authorize(toolkitSlug) as { redirectUrl?: string; url?: string };
-      return { authUrl: result.redirectUrl || result.url || "" };
+      const authUrl = String(result.redirectUrl || result.url || "").trim();
+      if (!authUrl) {
+        return { error: "Auth URL was not returned by provider" };
+      }
+      return { authUrl };
     } catch (err) {
       return {
         error: err instanceof Error ? err.message : String(err),

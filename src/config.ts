@@ -16,7 +16,6 @@ import {
 export const ComposioConfigSchema = z.object({
   enabled: z.boolean().default(true),
   apiKey: z.string().optional(),
-  defaultUserId: z.string().optional(),
   allowedToolkits: z.array(z.string()).optional(),
   blockedToolkits: z.array(z.string()).optional(),
   readOnlyMode: z.boolean().default(false),
@@ -50,7 +49,6 @@ export function parseComposioConfig(value: unknown): ComposioConfig {
   return ComposioConfigSchema.parse({
     enabled,
     apiKey,
-    defaultUserId: typeof source.defaultUserId === "string" ? source.defaultUserId : undefined,
     allowedToolkits: normalizeToolkitList(Array.isArray(source.allowedToolkits) ? source.allowedToolkits : undefined),
     blockedToolkits: normalizeToolkitList(Array.isArray(source.blockedToolkits) ? source.blockedToolkits : undefined),
     readOnlyMode,
@@ -76,10 +74,6 @@ export const composioConfigUiHints = {
     label: "API Key",
     help: "Composio API key from platform.composio.dev/settings",
     sensitive: true,
-  },
-  defaultUserId: {
-    label: "Default User ID",
-    help: "Default user ID for session scoping (optional)",
   },
   allowedToolkits: {
     label: "Allowed Toolkits",

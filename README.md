@@ -33,7 +33,6 @@ Or add manually to `~/.openclaw/openclaw.json`:
         "enabled": true,
         "config": {
           "apiKey": "your-api-key",
-          "defaultUserId": "my-app-user-123",
           "allowedToolkits": ["gmail", "sentry"]
         }
       }
@@ -63,7 +62,8 @@ The plugin gives your agent three tools:
 - `composio_execute_tool` — runs a Composio action (e.g. `GMAIL_FETCH_EMAILS`, `SENTRY_LIST_ISSUES`)
 - `composio_manage_connections` — checks connection status and generates OAuth links when a toolkit isn't connected yet
 
-`composio_execute_tool` also accepts optional `user_id` and `connected_account_id` fields for deterministic account selection when multiple accounts exist.
+`composio_search_tools` and `composio_execute_tool` require `user_id` so every action is explicitly scoped.
+`composio_execute_tool` also accepts optional `connected_account_id` for deterministic account selection when multiple accounts exist.
 
 The agent handles the rest. Ask it to "check my latest emails" and it will call the right tool, prompt you to connect Gmail if needed, and fetch the results.
 
@@ -74,6 +74,7 @@ openclaw composio setup                                 # interactive setup for 
 openclaw composio list --user-id user-123               # list available toolkits for a user scope
 openclaw composio status [toolkit] --user-id user-123   # check connection status in a user scope
 openclaw composio accounts [toolkit]                    # inspect connected accounts (id/user_id/status)
+openclaw composio accounts [toolkit] --user-id user-123 # optional filter for one user scope
 openclaw composio connect gmail --user-id user-123      # open OAuth link for a specific user scope
 openclaw composio disconnect gmail --user-id user-123   # remove a connection in that user scope
 openclaw composio search "send email" --user-id user-123
@@ -84,7 +85,6 @@ openclaw composio search "send email" --user-id user-123
 | Key | Description |
 |-----|-------------|
 | `apiKey` | Composio API key (required) |
-| `defaultUserId` | Default Composio `user_id` scope when `--user-id` is not provided |
 | `allowedToolkits` | Only allow these toolkits (e.g. `["gmail", "sentry"]`) |
 | `blockedToolkits` | Block specific toolkits |
 | `readOnlyMode` | Blocks likely-destructive actions by token matching (delete/update/create/send/etc.); use `allowedToolSlugs` to override safe exceptions |
@@ -100,8 +100,7 @@ may look disconnected.
 
 Tips:
 
-- Set `defaultUserId` in plugin config for your app's primary identity.
-- Prefer passing `user_id`/`--user-id` explicitly when checking status, connecting, disconnecting, or executing tools.
+- Always pass `user_id`/`--user-id` explicitly when searching, checking status, connecting, disconnecting, or executing tools.
 - Use `openclaw composio accounts <toolkit>` to discover which `user_id` owns active connections.
 
 ## Updating

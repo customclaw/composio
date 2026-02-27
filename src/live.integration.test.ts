@@ -34,7 +34,6 @@ function getLiveClient(): ComposioClient {
     liveClient = new ComposioClient({
       enabled: true,
       apiKey: API_KEY,
-      defaultUserId: LIVE_USER_ID,
       readOnlyMode: false,
     });
   }

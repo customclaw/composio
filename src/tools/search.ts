@@ -19,11 +19,9 @@ export const ComposioSearchToolSchema = Type.Object({
       description: "Maximum number of results to return (default: 10, max: 50)",
     })
   ),
-  user_id: Type.Optional(
-    Type.String({
-      description: "User ID for session scoping (uses default if not provided)",
-    })
-  ),
+  user_id: Type.String({
+    description: "Required user ID for session scoping.",
+  }),
 });
 
 /**
@@ -57,7 +55,13 @@ export function createComposioSearchTool(client: ComposioClient, _config: Compos
         50
       );
 
-      const userId = typeof params.user_id === "string" ? params.user_id : undefined;
+      const userId = typeof params.user_id === "string" ? params.user_id.trim() : "";
+      if (!userId) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: "user_id is required" }, null, 2) }],
+          details: { error: "user_id is required" },
+        };
+      }
 
       try {
         const results = await client.searchTools(query, { toolkits, limit, userId });

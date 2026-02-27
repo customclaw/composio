@@ -5,34 +5,62 @@ import type { ComposioConfig } from "../types.js";
 /**
  * Tool parameters for composio_manage_connections
  */
-export const ComposioManageConnectionsToolSchema = Type.Object({
-  action: Type.Union(
-    [Type.Literal("status"), Type.Literal("create"), Type.Literal("list"), Type.Literal("accounts")],
-    {
-      description: "Action to perform: 'status' to check connections, 'create' to initiate auth, 'list' to list toolkits, 'accounts' to inspect connected accounts",
-    }
-  ),
-  toolkit: Type.Optional(
-    Type.String({
-      description: "Toolkit name for 'status' or 'create' actions (e.g., 'github', 'gmail')",
-    })
-  ),
-  toolkits: Type.Optional(
-    Type.Array(Type.String(), {
-      description: "Multiple toolkits to check status for",
-    })
-  ),
-  user_id: Type.Optional(
-    Type.String({
-      description: "User ID for session scoping. Strongly recommended to avoid checking the wrong scope.",
-    })
-  ),
-  statuses: Type.Optional(
-    Type.Array(Type.String(), {
-      description: "Optional connection statuses filter for 'accounts' (e.g., ['ACTIVE'])",
-    })
-  ),
+const ActionDescription =
+  "Action to perform: 'status' to check connections, 'create' to initiate auth, " +
+  "'list' to list toolkits, 'accounts' to inspect connected accounts";
+
+const UserIdRequiredField = Type.String({
+  description: "Required user ID for session scoping.",
 });
+
+const UserIdOptionalField = Type.Optional(
+  Type.String({
+    description: "Optional user ID filter for accounts lookup.",
+  })
+);
+
+const ToolkitField = Type.Optional(
+  Type.String({
+    description: "Toolkit name (e.g., 'github', 'gmail')",
+  })
+);
+
+const ToolkitsField = Type.Optional(
+  Type.Array(Type.String(), {
+    description: "Multiple toolkits to check status for",
+  })
+);
+
+export const ComposioManageConnectionsToolSchema = Type.Union([
+  Type.Object({
+    action: Type.Literal("list", { description: ActionDescription }),
+    user_id: UserIdRequiredField,
+  }),
+  Type.Object({
+    action: Type.Literal("create", { description: ActionDescription }),
+    toolkit: Type.String({
+      description: "Toolkit name for 'create' action (e.g., 'github', 'gmail')",
+    }),
+    user_id: UserIdRequiredField,
+  }),
+  Type.Object({
+    action: Type.Literal("status", { description: ActionDescription }),
+    toolkit: ToolkitField,
+    toolkits: ToolkitsField,
+    user_id: UserIdRequiredField,
+  }),
+  Type.Object({
+    action: Type.Literal("accounts", { description: ActionDescription }),
+    toolkit: ToolkitField,
+    toolkits: ToolkitsField,
+    user_id: UserIdOptionalField,
+    statuses: Type.Optional(
+      Type.Array(Type.String(), {
+        description: "Optional connection statuses filter for 'accounts' (e.g., ['ACTIVE'])",
+      })
+    ),
+  }),
+]);
 
 /**
  * Create the composio_manage_connections tool
@@ -50,8 +78,18 @@ export function createComposioConnectionsTool(client: ComposioClient, _config: C
 
     async execute(_toolCallId: string, params: Record<string, unknown>) {
       const action = String(params.action || "status");
-      const userId = typeof params.user_id === "string" ? params.user_id : undefined;
-      const userIdWasExplicit = typeof params.user_id === "string" && params.user_id.trim().length > 0;
+      const userId = typeof params.user_id === "string" ? params.user_id.trim() : "";
+      const requiresUserId = action === "list" || action === "status" || action === "create";
+      if (requiresUserId && !userId) {
+        const errorResponse = {
+          action,
+          error: "user_id is required for this action",
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(errorResponse, null, 2) }],
+          details: errorResponse,
+        };
+      }
 
       try {
         switch (action) {
@@ -149,25 +187,22 @@ export function createComposioConnectionsTool(client: ComposioClient, _config: C
             const disconnectedToolkits = statuses.filter((s) => !s.connected).map((s) => s.toolkit);
             const hints: Array<{ toolkit: string; connected_user_ids: string[]; message: string }> = [];
 
-            if (!userIdWasExplicit) {
-              for (const toolkit of disconnectedToolkits) {
-                const activeUserIds = await client.findActiveUserIdsForToolkit(toolkit);
-                if (activeUserIds.length === 0) continue;
-                hints.push({
-                  toolkit,
-                  connected_user_ids: activeUserIds,
-                  message:
-                    `No user_id was provided, so status checked the default scope. ` +
-                    `'${toolkit}' has ACTIVE accounts under: ${activeUserIds.join(", ")}. ` +
-                    "Pass user_id explicitly for deterministic results.",
-                });
-              }
+            for (const toolkit of disconnectedToolkits) {
+              const activeUserIds = await client.findActiveUserIdsForToolkit(toolkit);
+              const otherUserIds = activeUserIds.filter((uid) => uid !== userId);
+              if (otherUserIds.length === 0) continue;
+              hints.push({
+                toolkit,
+                connected_user_ids: otherUserIds,
+                message:
+                  `'${toolkit}' has ACTIVE accounts under other user_id(s): ${otherUserIds.join(", ")}. ` +
+                  "Use a matching user_id to check that scope.",
+              });
             }
 
             const response = {
               action: "status",
               checked_user_id: statuses[0]?.userId,
-              user_id_explicit: userIdWasExplicit,
               count: statuses.length,
               connections: statuses.map((s) => ({
                 toolkit: s.toolkit,
