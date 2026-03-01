@@ -11,23 +11,14 @@ Composio now ships an official OpenClaw plugin:
 
 ## Which One Should You Use?
 
-Short version:
-
-- Use the **official plugin** if you want the simplest setup and direct MCP tools.
-- Use **this repo** if you need tighter control for multi-user setups.
-
 Main differences:
 
-| Area | This repo (`@customclaw/composio`) | Official (`@composio/openclaw-plugin`) |
-|---|---|---|
-| Integration model | 3 curated tools: search, execute, manage connections | Registers MCP tools directly by name |
-| User scoping | Explicit `user_id` required for core actions | No plugin-level user scoping guardrails |
-| Safety controls | `readOnlyMode`, allow/block toolkit lists, allow/block tool slugs | No equivalent plugin-level safety filters |
-| Account selection | Supports `connected_account_id` handling for deterministic execution | Direct passthrough to MCP tool calls |
-| Config key | `apiKey` (`COMPOSIO_API_KEY`) | `consumerKey` (`COMPOSIO_CONSUMER_KEY`) |
-| Best fit | Teams, multi-user, stricter operational control | Fast start, single-user or lighter controls |
+- **Three focused tools**: this plugin keeps the surface small with `composio_search_tools`, `composio_execute_tool`, and `composio_manage_connections`. The official plugin registers MCP tools directly.
+- **Multi-account support**: this plugin is built to handle account selection explicitly (for example, choosing the right Gmail account when multiple are connected).
 
-If you switch, note that both use plugin id `composio`, so run only one at a time.
+Use the official plugin when you want the quickest setup. Use this repo when account control matters more than minimal setup.
+
+Note: both use plugin id `composio`, so run only one at a time.
 
 ## Install
 
