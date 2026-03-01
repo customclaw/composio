@@ -1,6 +1,6 @@
 {
   "name": "@customclaw/composio",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "type": "module",
   "description": "Multi-Account Composio Plugin for OpenClaw — access 1000+ third-party integrations",
   "main": "dist/index.js",
