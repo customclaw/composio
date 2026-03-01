@@ -7,7 +7,7 @@ import { registerComposioCli } from "./cli.js";
 import { LEGACY_SHAPE_ERROR, hasLegacyFlatEntryConfig } from "./utils.js";
 
 /**
- * Composio Tool Router Plugin for OpenClaw
+ * Multi-Account Composio Plugin for OpenClaw
  *
  * Provides access to 1000+ third-party tools through Composio's unified interface.
  * Tools include: Gmail, Slack, GitHub, Notion, Linear, Jira, and many more.
@@ -28,9 +28,9 @@ import { LEGACY_SHAPE_ERROR, hasLegacyFlatEntryConfig } from "./utils.js";
  */
 const composioPlugin = {
   id: "composio",
-  name: "Composio Tool Router",
+  name: "Multi-Account Composio Plugin for OpenClaw",
   description:
-    "Access 1000+ third-party tools via Composio Tool Router. " +
+    "Access 1000+ third-party tools via Multi-Account Composio Plugin for OpenClaw. " +
     "Search, authenticate, and execute tools for Gmail, Slack, GitHub, Notion, and more.",
   configSchema: composioPluginConfigSchema,
 

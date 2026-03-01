@@ -1,6 +1,6 @@
 {
   "id": "composio",
-  "name": "Composio Tool Router",
+  "name": "Multi-Account Composio Plugin for OpenClaw",
   "description": "Access 1000+ third-party tools via Composio (Gmail, Slack, GitHub, Notion, etc.)",
   "configSchema": {
     "type": "object",
@@ -48,7 +48,7 @@
   "uiHints": {
     "enabled": {
       "label": "Enable Composio",
-      "help": "Enable or disable the Composio Tool Router integration"
+      "help": "Enable or disable the Multi-Account Composio Plugin for OpenClaw integration"
     },
     "apiKey": {
       "label": "API Key",
