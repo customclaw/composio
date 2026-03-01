@@ -7,9 +7,7 @@ import type { ComposioClient } from "./client.js";
 import type { ComposioConfig } from "./types.js";
 import {
   isRecord,
-  normalizeToolkitList,
   normalizeToolkitSlug,
-  stripLegacyFlatConfigKeys,
 } from "./utils.js";
 
 interface PluginLogger {
@@ -27,19 +25,6 @@ interface RegisterCliOptions {
 
 const DEFAULT_OPENCLAW_CONFIG_PATH = path.join(os.homedir(), ".openclaw", "openclaw.json");
 const COMPOSIO_PLUGIN_ID = "composio";
-
-function parseCsvToolkits(value?: string): string[] | undefined {
-  if (!value) return undefined;
-  return normalizeToolkitList(value.split(","));
-}
-
-function parseBooleanLike(value: string): boolean | undefined {
-  const raw = value.trim().toLowerCase();
-  if (!raw) return undefined;
-  if (["1", "true", "yes", "y"].includes(raw)) return true;
-  if (["0", "false", "no", "n"].includes(raw)) return false;
-  return undefined;
-}
 
 function normalizePluginIdList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -101,16 +86,10 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
     .description("Create or update Composio config in ~/.openclaw/openclaw.json")
     .option("-c, --config-path <path>", "OpenClaw config file path", DEFAULT_OPENCLAW_CONFIG_PATH)
     .option("--api-key <apiKey>", "Composio API key")
-    .option("--allowed-toolkits <toolkits>", "Comma-separated allowed toolkit slugs")
-    .option("--blocked-toolkits <toolkits>", "Comma-separated blocked toolkit slugs")
-    .option("--read-only <enabled>", "Enable read-only mode (true/false)")
     .option("-y, --yes", "Skip prompts and use defaults/provided values")
     .action(async (options: {
       configPath: string;
       apiKey?: string;
-      allowedToolkits?: string;
-      blockedToolkits?: string;
-      readOnly?: string;
       yes?: boolean;
     }) => {
       const configPath = path.resolve(options.configPath || DEFAULT_OPENCLAW_CONFIG_PATH);
@@ -163,31 +142,6 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
           String(config.apiKey || "").trim() ||
           String(process.env.COMPOSIO_API_KEY || "").trim();
 
-        let allowedToolkits =
-          parseCsvToolkits(options.allowedToolkits) ||
-          (Array.isArray(existingComposioConfig.allowedToolkits)
-            ? normalizeToolkitList(existingComposioConfig.allowedToolkits)
-            : normalizeToolkitList(config.allowedToolkits));
-
-        let blockedToolkits =
-          parseCsvToolkits(options.blockedToolkits) ||
-          (Array.isArray(existingComposioConfig.blockedToolkits)
-            ? normalizeToolkitList(existingComposioConfig.blockedToolkits)
-            : normalizeToolkitList(config.blockedToolkits));
-
-        let readOnlyMode =
-          typeof existingComposioConfig.readOnlyMode === "boolean"
-            ? existingComposioConfig.readOnlyMode
-            : Boolean(config.readOnlyMode);
-        if (options.readOnly !== undefined) {
-          const parsedReadOnly = parseBooleanLike(options.readOnly);
-          if (parsedReadOnly === undefined) {
-            logger.error("Invalid value for --read-only. Expected one of: true/false/yes/no/1/0.");
-            return;
-          }
-          readOnlyMode = parsedReadOnly;
-        }
-
         if (!options.yes) {
           const rl = createInterface({ input: process.stdin, output: process.stdout });
           try {
@@ -195,32 +149,6 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
               `Composio API key${apiKey ? " [configured]" : ""}: `
             );
             if (apiKeyPrompt.trim()) apiKey = apiKeyPrompt.trim();
-
-            const allowedDefault = allowedToolkits && allowedToolkits.length > 0
-              ? ` [${allowedToolkits.join(",")}]`
-              : " (optional)";
-            const allowedPrompt = await rl.question(`Allowed toolkits${allowedDefault}: `);
-            if (allowedPrompt.trim()) {
-              allowedToolkits = parseCsvToolkits(allowedPrompt) || [];
-            }
-
-            const blockedDefault = blockedToolkits && blockedToolkits.length > 0
-              ? ` [${blockedToolkits.join(",")}]`
-              : " (optional)";
-            const blockedPrompt = await rl.question(`Blocked toolkits${blockedDefault}: `);
-            if (blockedPrompt.trim()) {
-              blockedToolkits = parseCsvToolkits(blockedPrompt) || [];
-            }
-
-            const readOnlyPrompt = await rl.question(
-              `Enable read-only safety mode? (y/N) [${readOnlyMode ? "Y" : "N"}]: `
-            );
-            const parsedReadOnlyPrompt = parseBooleanLike(readOnlyPrompt);
-            if (parsedReadOnlyPrompt !== undefined) {
-              readOnlyMode = parsedReadOnlyPrompt;
-            } else if (readOnlyPrompt.trim()) {
-              logger.warn("Invalid read-only input. Keeping existing readOnlyMode value.");
-            }
           } finally {
             rl.close();
           }
@@ -234,22 +162,11 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
         const mergedComposioConfig: Record<string, unknown> = {
           ...existingComposioConfig,
           apiKey,
-          readOnlyMode,
         };
         delete mergedComposioConfig.defaultUserId;
-        if (allowedToolkits && allowedToolkits.length > 0) {
-          mergedComposioConfig.allowedToolkits = allowedToolkits;
-        } else {
-          delete mergedComposioConfig.allowedToolkits;
-        }
-        if (blockedToolkits && blockedToolkits.length > 0) {
-          mergedComposioConfig.blockedToolkits = blockedToolkits;
-        } else {
-          delete mergedComposioConfig.blockedToolkits;
-        }
 
         entries.composio = {
-          ...stripLegacyFlatConfigKeys(existingComposioEntry),
+          ...existingComposioEntry,
           enabled: true,
           config: mergedComposioConfig,
         };
@@ -262,7 +179,6 @@ export function registerComposioCli({ program, getClient, config, logger }: Regi
         console.log("\nComposio setup saved.");
         console.log("─".repeat(40));
         console.log(`Config: ${configPath}`);
-        console.log(`readOnlyMode: ${readOnlyMode ? "enabled" : "disabled"}`);
         if (updatedPluginSystemEnabled) {
           console.log("plugins.enabled: set to true");
         }

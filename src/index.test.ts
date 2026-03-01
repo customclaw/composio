@@ -112,28 +112,4 @@ describe("composio plugin registration", () => {
     expect(createComposioConnectionsToolMock).toHaveBeenCalled();
     expect(api.logger.info).toHaveBeenCalledWith("[composio] Plugin registered with 3 tools and CLI commands");
   });
-
-  it("throws when legacy flat entry-level keys are present in config", async () => {
-    const { default: composioPlugin } = await import("./index.js");
-    const api = makeApi(
-      { apiKey: "test-key" },
-      {
-        plugins: {
-          entries: {
-            composio: {
-              enabled: true,
-              defaultUserId: "legacy-user",
-              config: { apiKey: "test-key" },
-            },
-          },
-        },
-      }
-    );
-
-    expect(() => composioPlugin.register(api as any)).toThrow(
-      "Legacy Composio config shape detected. Run 'openclaw composio setup'."
-    );
-    expect(api.registerCli).not.toHaveBeenCalled();
-    expect(api.registerTool).not.toHaveBeenCalled();
-  });
 });

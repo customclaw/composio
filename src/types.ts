@@ -2,21 +2,9 @@
  * Composio Tool Router types for OpenClaw integration
  */
 
-export type ComposioSessionTag =
-  | "readOnlyHint"
-  | "destructiveHint"
-  | "idempotentHint"
-  | "openWorldHint";
-
 export interface ComposioConfig {
   enabled: boolean;
   apiKey?: string;
-  allowedToolkits?: string[];
-  blockedToolkits?: string[];
-  readOnlyMode?: boolean;
-  sessionTags?: ComposioSessionTag[];
-  allowedToolSlugs?: string[];
-  blockedToolSlugs?: string[];
 }
 
 export interface ToolSearchResult {

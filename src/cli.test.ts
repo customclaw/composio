@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerComposioCli } from "./cli.js";
-import { parseComposioConfig } from "./config.js";
 
 type LoggerEntry = { level: "info" | "warn" | "error"; message: string };
 
@@ -121,7 +120,6 @@ describe("composio setup cli", () => {
     expect(parsed.plugins.deny).toEqual(["legacy-plugin"]);
     expect(parsed.plugins.entries.composio.enabled).toBe(true);
     expect(parsed.plugins.entries.composio.config.apiKey).toBe("test-api-key");
-    expect(parsed.plugins.entries.composio.config.readOnlyMode).toBe(false);
     expect(consoleSpy).toHaveBeenCalledWith("plugins.enabled: set to true");
     expect(consoleSpy).toHaveBeenCalledWith("plugins.allow: added 'composio'");
     expect(consoleSpy).toHaveBeenCalledWith("plugins.deny: removed 'composio'");
@@ -137,21 +135,6 @@ describe("composio setup cli", () => {
     });
 
     expect(logs.some((entry) => entry.message.includes("Composio API key is required"))).toBe(true);
-  });
-
-  it("rejects invalid --read-only values instead of silently falling back", async () => {
-    const { setup, logs } = buildCliFixture({ enabled: true });
-    const configPath = path.join(tmpDir, "openclaw.json");
-
-    await setup.runAction({
-      configPath,
-      apiKey: "test-api-key",
-      readOnly: "banana",
-      yes: true,
-    });
-
-    expect(logs.some((entry) => entry.message.includes("Invalid value for --read-only"))).toBe(true);
-    await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("normalizes allowlist entry to exact lowercase composio id", async () => {
@@ -182,70 +165,6 @@ describe("composio setup cli", () => {
     const parsed = JSON.parse(await readFile(configPath, "utf8"));
     expect(parsed.plugins.allow).toEqual(["telegram", "composio"]);
     expect(consoleSpy).toHaveBeenCalledWith("plugins.allow: added 'composio'");
-  });
-
-  it("drops legacy flat config keys so setup values are applied after restart", async () => {
-    const { setup } = buildCliFixture({ enabled: true });
-    const configPath = path.join(tmpDir, "openclaw.json");
-
-    await writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          plugins: {
-            entries: {
-              composio: {
-                enabled: false,
-                defaultUserId: "legacy-user",
-                allowedToolkits: ["gmail"],
-                blockedToolkits: ["shopify"],
-                readOnlyMode: true,
-                customMetadata: "preserve-me",
-                config: {
-                  apiKey: "legacy-key",
-                  allowedToolkits: ["sentry"],
-                  blockedToolkits: ["posthog"],
-                  readOnlyMode: true,
-                },
-              },
-            },
-          },
-        },
-        null,
-        2
-      )
-    );
-
-    await setup.runAction({
-      configPath,
-      apiKey: "updated-key",
-      allowedToolkits: "gmail,sentry",
-      blockedToolkits: "posthog",
-      readOnly: "false",
-      yes: true,
-    });
-
-    const parsed = JSON.parse(await readFile(configPath, "utf8"));
-    const composioEntry = parsed.plugins.entries.composio;
-    expect(composioEntry.enabled).toBe(true);
-    expect(composioEntry.customMetadata).toBe("preserve-me");
-
-    expect(composioEntry.defaultUserId).toBeUndefined();
-    expect(composioEntry.allowedToolkits).toBeUndefined();
-    expect(composioEntry.blockedToolkits).toBeUndefined();
-    expect(composioEntry.readOnlyMode).toBeUndefined();
-
-    expect(composioEntry.config.apiKey).toBe("updated-key");
-    expect(composioEntry.config.defaultUserId).toBeUndefined();
-    expect(composioEntry.config.allowedToolkits).toEqual(["gmail", "sentry"]);
-    expect(composioEntry.config.blockedToolkits).toEqual(["posthog"]);
-    expect(composioEntry.config.readOnlyMode).toBe(false);
-
-    const effectiveConfig = parseComposioConfig(composioEntry);
-    expect(effectiveConfig).not.toHaveProperty("defaultUserId");
-    expect(effectiveConfig.allowedToolkits).toEqual(["gmail", "sentry"]);
-    expect(effectiveConfig.blockedToolkits).toEqual(["posthog"]);
-    expect(effectiveConfig.readOnlyMode).toBe(false);
   });
 
   it("requires --user-id for list command", async () => {

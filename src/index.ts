@@ -4,7 +4,6 @@ import { createComposioSearchTool } from "./tools/search.js";
 import { createComposioExecuteTool } from "./tools/execute.js";
 import { createComposioConnectionsTool } from "./tools/connections.js";
 import { registerComposioCli } from "./cli.js";
-import { LEGACY_SHAPE_ERROR, hasLegacyFlatEntryConfig } from "./utils.js";
 
 /**
  * Multi-Account Composio Plugin for OpenClaw
@@ -35,10 +34,6 @@ const composioPlugin = {
   configSchema: composioPluginConfigSchema,
 
   register(api: any) {
-    if (hasLegacyFlatEntryConfig(api?.config)) {
-      throw new Error(LEGACY_SHAPE_ERROR);
-    }
-
     const config = parseComposioConfig(api.pluginConfig);
     let client: ReturnType<typeof createComposioClient> | null = null;
 

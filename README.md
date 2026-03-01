@@ -29,8 +29,7 @@ Or add manually to `~/.openclaw/openclaw.json`:
       "composio": {
         "enabled": true,
         "config": {
-          "apiKey": "your-api-key",
-          "allowedToolkits": ["gmail", "sentry"]
+          "apiKey": "your-api-key"
         }
       }
     }
@@ -57,12 +56,6 @@ Both `composio_search_tools` and `composio_execute_tool` require a `user_id` so 
 | Key | Description |
 |-----|-------------|
 | `apiKey` | Composio API key (required) |
-| `allowedToolkits` | Only allow these toolkits (e.g. `["gmail", "sentry"]`) |
-| `blockedToolkits` | Block specific toolkits |
-| `readOnlyMode` | Blocks destructive actions by token matching (delete/update/create/send/etc.); use `allowedToolSlugs` to override safe exceptions |
-| `sessionTags` | Tool Router tags (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) |
-| `allowedToolSlugs` | Explicit allowlist of UPPERCASE tool slugs |
-| `blockedToolSlugs` | Explicit denylist of UPPERCASE tool slugs |
 
 ## CLI
 
